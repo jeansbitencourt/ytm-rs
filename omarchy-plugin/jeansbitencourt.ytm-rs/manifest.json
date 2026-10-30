@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "jeansbitencourt.ytm-rs",
+  "name": "YTM-RS",
+  "version": "0.1.0",
+  "author": "Jean Bitencourt",
+  "license": "MIT",
+  "description": "YouTube Music status and controls in the Omarchy Top Bar",
+  "keywords": [
+    "music",
+    "youtube",
+    "ytm",
+    "player",
+    "mpris"
+  ],
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "YouTube Music (YTM-RS)",
+    "description": "Controle rápido do YouTube Music na barra superior",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

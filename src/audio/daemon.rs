@@ -69,6 +69,54 @@ impl AudioDaemon {
         // Write initial status.json
         self.write_status_json().await;
 
+        // MPRIS2 Integration
+        let (mpris_cmd_tx, mut mpris_cmd_rx) = mpsc::channel(32);
+        let daemon_for_mpris = Arc::clone(&self);
+        tokio::spawn(async move {
+            while let Some(cmd) = mpris_cmd_rx.recv().await {
+                match cmd {
+                    DaemonCommand::Toggle => daemon_for_mpris.toggle().await,
+                    DaemonCommand::Play => {
+                        let mut state = daemon_for_mpris.state.lock().await;
+                        if state.status == PlaybackStatus::Paused {
+                            state.status = PlaybackStatus::Playing;
+                            let _ = daemon_for_mpris.mpv_tx.send(MpvCommand::SetPause(false)).await;
+                        }
+                        drop(state);
+                        daemon_for_mpris.broadcast_and_save().await;
+                    }
+                    DaemonCommand::Pause => {
+                        let mut state = daemon_for_mpris.state.lock().await;
+                        if state.status == PlaybackStatus::Playing {
+                            state.status = PlaybackStatus::Paused;
+                            let _ = daemon_for_mpris.mpv_tx.send(MpvCommand::SetPause(true)).await;
+                        }
+                        drop(state);
+                        daemon_for_mpris.broadcast_and_save().await;
+                    }
+                    DaemonCommand::Next => daemon_for_mpris.next_track().await,
+                    DaemonCommand::Prev => daemon_for_mpris.prev_track().await,
+                    DaemonCommand::Stop => {
+                        let mut state = daemon_for_mpris.state.lock().await;
+                        state.status = PlaybackStatus::Stopped;
+                        drop(state);
+                        let _ = daemon_for_mpris.mpv_tx.send(MpvCommand::Stop).await;
+                        daemon_for_mpris.broadcast_and_save().await;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        if let Ok(mut mpris) = crate::topbar::mpris::MprisServer::new(mpris_cmd_tx) {
+            let mut state_rx = self.bcast_tx.subscribe();
+            tokio::spawn(async move {
+                while let Ok(state) = state_rx.recv().await {
+                    mpris.update(&state);
+                }
+            });
+        }
+
         // MPV event handler loop
         let daemon_clone = Arc::clone(&self);
         tokio::spawn(async move {
