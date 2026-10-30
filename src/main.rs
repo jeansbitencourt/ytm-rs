@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use crossterm::event::{self, Event, KeyEventKind, EnableMouseCapture, DisableMouseCapture};
+use crossterm::event::{self, Event, KeyEventKind, EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
@@ -252,7 +252,7 @@ async fn run_tui(config: AppConfig) -> Result<()> {
     // 2. Terminal setup
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -319,6 +319,9 @@ async fn run_tui(config: AppConfig) -> Result<()> {
                 Event::Mouse(mouse) => {
                     app.handle_mouse_event(mouse).await?;
                 }
+                Event::Paste(text) => {
+                    app.handle_paste(&text);
+                }
                 _ => {}
             }
         }
@@ -334,7 +337,7 @@ async fn run_tui(config: AppConfig) -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture, DisableBracketedPaste)?;
     terminal.show_cursor()?;
 
     Ok(())

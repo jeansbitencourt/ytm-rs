@@ -39,9 +39,13 @@ pub struct App {
     pub is_searching: bool,
     pub player_state: PlayerState,
     pub show_help: bool,
+    pub show_auth_modal: bool,
+    pub auth_input: String,
+    pub auth_message: Option<(String, bool)>,
     pub should_quit: bool,
     pub playerbar_area: Rect,
     pub client: InnertubeClient,
+    pub auth: crate::innertube::auth::AuthConfig,
     pub db: Arc<Mutex<Database>>,
 }
 
@@ -52,7 +56,7 @@ impl App {
         let db = Arc::new(Mutex::new(db_instance));
 
         let auth = crate::innertube::auth::AuthConfig::load(&config.auth_file);
-        let client = InnertubeClient::new(auth);
+        let client = InnertubeClient::new(auth.clone());
 
         let mut sidebar_state = ListState::default();
         sidebar_state.select(Some(0));
@@ -88,9 +92,13 @@ impl App {
             is_searching: false,
             player_state: PlayerState::default(),
             show_help: false,
+            show_auth_modal: false,
+            auth_input: String::new(),
+            auth_message: None,
             should_quit: false,
             playerbar_area: Rect::default(),
             client,
+            auth,
             db,
         })
     }
@@ -144,11 +152,58 @@ impl App {
             return Ok(());
         }
 
+        if self.show_auth_modal {
+            match key.code {
+                KeyCode::Esc => {
+                    self.show_auth_modal = false;
+                }
+                KeyCode::Enter => {
+                    if !self.auth_input.trim().is_empty() {
+                        let value = self.auth_input.trim().to_string();
+                        let sapisid = crate::innertube::auth::extract_sapisid_from_cookies(&value);
+                        let mut new_auth = self.auth.clone();
+                        new_auth.cookies = Some(value);
+                        new_auth.sapisid = sapisid;
+                        if let Err(e) = new_auth.save(&self.config.auth_file) {
+                            self.auth_message = Some((format!("Erro ao salvar: {}", e), false));
+                        } else {
+                            self.auth = new_auth.clone();
+                            self.client.auth = new_auth;
+                            self.auth_message = Some(("✓ Autenticado com sucesso no YouTube Music!".to_string(), true));
+                            self.auth_input.clear();
+                        }
+                    }
+                }
+                KeyCode::Backspace => {
+                    self.auth_input.pop();
+                }
+                KeyCode::Char('l') | KeyCode::Char('L') if self.auth_input.is_empty() => {
+                    if self.auth.is_authenticated() {
+                        let _ = std::fs::remove_file(&self.config.auth_file);
+                        self.auth = crate::innertube::auth::AuthConfig::default();
+                        self.client.auth = self.auth.clone();
+                        self.auth_message = Some(("✓ Desconectado. Modo Público ativo.".to_string(), true));
+                    }
+                }
+                KeyCode::Char(c) => {
+                    self.auth_input.push(c);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
         // Global shortcuts when not in search input mode
         if self.active_panel != ActivePanel::Search {
             match key.code {
                 KeyCode::Char('?') => {
                     self.show_help = true;
+                    return Ok(());
+                }
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    self.show_auth_modal = true;
+                    self.auth_input.clear();
+                    self.auth_message = None;
                     return Ok(());
                 }
                 KeyCode::Char('q') => {
@@ -369,10 +424,20 @@ impl App {
                     PlayerButton::VolUp => {
                         let _ = send_daemon_command(&self.config, DaemonCommand::VolumeDelta(5)).await;
                     }
+                    PlayerButton::Account => {
+                        self.show_auth_modal = !self.show_auth_modal;
+                        self.auth_input.clear();
+                        self.auth_message = None;
+                    }
                     PlayerButton::Help => {
                         self.show_help = !self.show_help;
                     }
                 }
+                return Ok(());
+            }
+
+            if self.show_auth_modal {
+                self.show_auth_modal = false;
                 return Ok(());
             }
 
@@ -383,6 +448,14 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    pub fn handle_paste(&mut self, text: &str) {
+        if self.show_auth_modal {
+            self.auth_input.push_str(text);
+        } else if self.active_panel == ActivePanel::Search {
+            self.search_input.push_str(text);
+        }
     }
 
     pub async fn perform_search(&mut self) {

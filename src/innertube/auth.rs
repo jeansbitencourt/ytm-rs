@@ -67,6 +67,10 @@ pub fn extract_sapisid_from_cookies(cookies: &str) -> Option<String> {
             return Some(s.to_string());
         }
     }
+    let trimmed = cookies.trim();
+    if !trimmed.contains(';') && !trimmed.contains('=') && trimmed.len() >= 10 {
+        return Some(trimmed.to_string());
+    }
     None
 }
 

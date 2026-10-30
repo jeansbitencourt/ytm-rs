@@ -16,6 +16,7 @@ pub enum PlayerButton {
     Radio,
     VolDown,
     VolUp,
+    Account,
     Help,
 }
 
@@ -46,7 +47,9 @@ pub fn get_player_button_at(col: u16, row: u16, playerbar_area: Rect) -> Option<
         Some(PlayerButton::VolDown)
     } else if (72..=82).contains(&rel_x) {
         Some(PlayerButton::VolUp)
-    } else if (85..=96).contains(&rel_x) {
+    } else if (85..=95).contains(&rel_x) {
+        Some(PlayerButton::Account)
+    } else if (97..=108).contains(&rel_x) {
         Some(PlayerButton::Help)
     } else {
         None
@@ -148,6 +151,7 @@ pub fn render_playerbar(
         Span::styled("[📻 Rádio]   ", theme.accent_style()),
         Span::styled("[🔉 Vol-]  ", theme.text_style()),
         Span::styled("[🔊 Vol+]   ", theme.text_style()),
+        Span::styled("[👤 Conta]   ", theme.accent_style()),
         Span::styled("[❓ Ajuda]", theme.muted_style()),
     ]);
     f.render_widget(Paragraph::new(buttons_line), right_chunks[1]);
@@ -196,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_button_hit_detection() {
-        let area = Rect::new(0, 10, 100, 5);
+        let area = Rect::new(0, 10, 120, 5);
         // buttons are at row 10 + 1 (border) + 1 (row 1) = 12
         assert_eq!(get_player_button_at(12, 12, area), Some(PlayerButton::Prev));
         assert_eq!(get_player_button_at(24, 12, area), Some(PlayerButton::PlayPause));
@@ -205,7 +209,8 @@ mod tests {
         assert_eq!(get_player_button_at(60, 12, area), Some(PlayerButton::Radio));
         assert_eq!(get_player_button_at(72, 12, area), Some(PlayerButton::VolDown));
         assert_eq!(get_player_button_at(85, 12, area), Some(PlayerButton::VolUp));
-        assert_eq!(get_player_button_at(96, 12, area), Some(PlayerButton::Help));
+        assert_eq!(get_player_button_at(96, 12, area), Some(PlayerButton::Account));
+        assert_eq!(get_player_button_at(108, 12, area), Some(PlayerButton::Help));
         // Wrong row
         assert_eq!(get_player_button_at(12, 11, area), None);
     }
