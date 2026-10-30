@@ -1,0 +1,35 @@
+[Desktop Entry]
+Type=Application
+Name=YTM-RS
+Name[pt_BR]=YTM-RS (YouTube Music)
+GenericName=YouTube Music Player
+GenericName[pt_BR]=Reprodutor do YouTube Music
+Comment=Fast terminal client and background daemon for YouTube Music
+Comment[pt_BR]=Cliente de terminal rápido e daemon em segundo plano para o YouTube Music
+Exec=foot --app-id=ytm-rs --title="YTM-RS" -e ytm-rs
+Icon=ytm-rs
+Terminal=false
+Categories=AudioVideo;Audio;Player;Music;
+Keywords=youtube;music;ytm;tui;player;audio;
+StartupWMClass=ytm-rs
+Actions=PlayPause;NextTrack;PreviousTrack;LikeTrack;
+
+[Desktop Action PlayPause]
+Name=Play / Pause
+Name[pt_BR]=Reproduzir / Pausar
+Exec=ytm-rs ctl toggle
+
+[Desktop Action NextTrack]
+Name=Next Track
+Name[pt_BR]=Próxima Faixa
+Exec=ytm-rs ctl next
+
+[Desktop Action PreviousTrack]
+Name=Previous Track
+Name[pt_BR]=Faixa Anterior
+Exec=ytm-rs ctl prev
+
+[Desktop Action LikeTrack]
+Name=Like Current Track
+Name[pt_BR]=Curtir Música Atual
+Exec=ytm-rs ctl like

@@ -161,7 +161,7 @@ impl Database {
 
     pub fn get_history(&self, limit: usize) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT video_id, title, artist, album, duration_secs, thumbnail_url FROM play_history ORDER BY played_at DESC LIMIT ?1",
+            "SELECT video_id, title, artist, album, duration_secs, thumbnail_url FROM play_history ORDER BY played_at DESC, id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| {
             let track = Track::new(

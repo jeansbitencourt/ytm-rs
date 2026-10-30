@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT"
+
+CARGO_BIN="$HOME/.cargo/bin/cargo"
+if [ ! -x "$CARGO_BIN" ]; then
+    CARGO_BIN="$(which cargo 2>/dev/null || true)"
+fi
+
+"$CARGO_BIN" test --all-targets

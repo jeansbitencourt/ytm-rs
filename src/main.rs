@@ -13,22 +13,14 @@ use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tracing::info;
 
-pub mod app;
-pub mod audio;
-pub mod cache;
-pub mod config;
-pub mod innertube;
-pub mod theme;
-pub mod topbar;
-pub mod ui;
-
-use app::App;
-use audio::daemon::{ensure_daemon_running, send_daemon_command, AudioDaemon};
-use audio::{DaemonCommand, DaemonResponse};
-use config::AppConfig;
-use innertube::auth::{extract_sapisid_from_cookies, AuthConfig};
-use theme::{Theme, ThemeWatcher};
-use topbar::waybar::read_waybar_status;
+use ytm_rs::app::App;
+use ytm_rs::audio::daemon::{ensure_daemon_running, send_daemon_command, AudioDaemon};
+use ytm_rs::audio::{DaemonCommand, DaemonResponse};
+use ytm_rs::config::AppConfig;
+use ytm_rs::innertube::auth::{extract_sapisid_from_cookies, AuthConfig};
+use ytm_rs::theme::{Theme, ThemeWatcher};
+use ytm_rs::topbar::waybar::read_waybar_status;
+use ytm_rs::ui;
 
 #[derive(Parser)]
 #[command(name = "ytm-rs")]

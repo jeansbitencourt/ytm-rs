@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+mkdir -p "$ROOT/build"
+cd "$ROOT"
+
+CARGO_BIN="$HOME/.cargo/bin/cargo"
+if [ ! -x "$CARGO_BIN" ]; then
+    CARGO_BIN="$(which cargo 2>/dev/null || true)"
+fi
+
+if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
+    echo "Error: cargo not found in PATH or ~/.cargo/bin" >&2
+    exit 1
+fi
+
+"$CARGO_BIN" build --release
+cp "$ROOT/target/release/ytm-rs" "$ROOT/build/ytm-rs"
+
+echo "Built $ROOT/build/ytm-rs"

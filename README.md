@@ -1,0 +1,107 @@
+# YTM-RS: Cliente de Terminal & Daemon para YouTube Music
+
+![YTM-RS Icon](pkgbuild/ytm-rs.svg)
+
+**YTM-RS** é um cliente de terminal (TUI) ultrarrápido e daemon de áudio para o **YouTube Music**, construído em **Rust + Ratatui + Tokio** e integrado profundamente ao ecossistema desktop **Omarchy** (Hyprland + Omarchy Shell / Quickshell).
+
+Inspirado na arquitetura do lendário `spotify-tui`, o `ytm-rs` consome menos de **18 MB de RAM**, funciona **imediatamente sem login** (com suporte a autenticação opcional para biblioteca e likes), e permite controle global contínuo pela barra superior (**Top Bar**) mesmo quando a janela principal está fechada.
+
+---
+
+## Recursos Principais
+
+- **Arquitetura Client-Daemon**: O processo de áudio em background (`ytm-rs daemon`) toca em background via socket UNIX e gerencia o `mpv` headless. Ao fechar a janela da TUI (`q`), sua música continua tocando sem interrupção.
+- **Top Bar do Omarchy (Quickshell & Waybar)**:
+  - Servidor **MPRIS2 D-Bus** nativo (`org.mpris.MediaPlayer2.ytmrs`) integrado ao widget de áudio padrão do sistema.
+  - Widget nativo para a Top Bar (`jeansbitencourt.ytm-rs`) com suporte a **Clique Esquerdo** (Play/Pause), **Clique do Meio** (Favoritar/Like), **Clique Direito** (Abrir/Esconder TUI no Scratchpad) e **Scroll** (Ajuste de Volume).
+- **Interface Ratatui Estilo spotify-tui**: Layout modular em 4 blocos (Busca, Biblioteca, Faixas e Player Bar) com bordas arredondadas e suporte a temas ao vivo do Omarchy.
+- **Sincronização de Tema Dinâmica**: Lê e monitora em tempo real as cores de `~/.local/state/omarchy/current/theme/colors.toml`. Ao trocar o tema com `omarchy theme set`, o visual do `ytm-rs` se adapta instantaneamente sem reiniciar.
+- **Transições Instantâneas (Prefetching)**: Worker assíncrono resolve a URL de áudio Opus 251 da próxima faixa assim que a música atual atinge 80%, garantindo troca instantânea (< 50ms).
+- **Rádio Dinâmica Infinita**: Pressione `r` em qualquer faixa para gerar uma fila de rádio infinita baseada no algoritmo do YouTube Music (`RDAMVM{videoId}`).
+- **Atalhos Orientados a Teclado (Vim-like)**.
+
+---
+
+## Tabela de Atalhos de Teclado (TUI)
+
+| Tecla / Gatilho | Ação | Descrição |
+|---|---|---|
+| `/` | **Buscar** | Foca na barra de pesquisa no topo |
+| `1` | **Focar Biblioteca** | Alterna foco para o painel de bibliotecas/playlists à esquerda |
+| `2` | **Focar Faixas** | Alterna foco para a tabela de músicas à direita |
+| `h` `j` `k` `l` ou `Setas` | **Navegação Vim** | Rola listas e alterna entre painéis |
+| `Enter` | **Reproduzir** | Toca a faixa selecionada ou entra na categoria da biblioteca |
+| `Space` | **Play / Pause** | Alterna reprodução e pausa global |
+| `n` / `p` | **Próxima / Anterior** | Avança ou retorna uma faixa na fila |
+| `+` / `-` | **Volume** | Aumenta ou diminui o volume em 5% |
+| `f` | **Favoritar (Like)** | Adiciona ou remove dos favoritos (com notificação desktop) |
+| `a` | **Adicionar à Fila** | Enfileira a música selecionada para tocar a seguir |
+| `r` | **Rádio Infinita** | Inicia rádio contínua baseada na faixa selecionada |
+| `?` | **Ajuda** | Abre o menu com a lista de todos os atalhos |
+| `q` | **Esconder TUI** | Fecha a janela mantendo o áudio tocando em background |
+| `Q` ou `Ctrl+Q` | **Sair Total** | Encerra a janela TUI e o daemon de segundo plano |
+
+---
+
+## Controle pela Top Bar e CLI (`ytm-rs ctl`)
+
+Subcomandos remotos ultrarrápidos respondem em **< 2ms** através do socket `/tmp/ytm-state.sock`:
+
+```bash
+# Alternar reprodução
+ytm-rs ctl toggle
+
+# Próxima / Anterior
+ytm-rs ctl next
+ytm-rs ctl prev
+
+# Ajustar volume
+ytm-rs ctl vol-up
+ytm-rs ctl vol-down
+ytm-rs ctl volume 80
+
+# Curtir música atual
+ytm-rs ctl like
+
+# Obter estado ou JSON para barra
+ytm-rs ctl status
+ytm-rs ctl waybar
+```
+
+---
+
+## Autenticação Opcional (`ytm-rs auth`)
+
+O aplicativo funciona perfeitamente sem login para buscas, reprodução e rádios. Para acessar suas playlists salvas e sincronizar curtidas com a sua conta do YouTube Music:
+
+```bash
+# Ver status
+ytm-rs auth status
+
+# Importar cookies da sua conta do navegador
+ytm-rs auth cookies "SAPISID=...; __Secure-3PAPISID=...;"
+
+# Desconectar
+ytm-rs auth logout
+```
+
+---
+
+## Compilação e Instalação
+
+```bash
+# 1. Compilar binário release
+./bin/build
+
+# 2. Executar suíte de testes
+./bin/test
+
+# 3. Instalar no sistema (Desktop + Ícone + Plugin Top Bar)
+./bin/install
+```
+
+---
+
+## Licença
+
+Distribuído sob a licença [MIT](LICENSE). Copyright (c) 2026 Jean Bitencourt.
