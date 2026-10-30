@@ -20,6 +20,7 @@ pub struct AudioDaemon {
     bcast_tx: broadcast::Sender<PlayerState>,
     mpv_tx: mpsc::Sender<MpvCommand>,
     prefetch_triggered: Arc<Mutex<bool>>,
+    tui_clients: Arc<Mutex<usize>>,
 }
 
 impl AudioDaemon {
@@ -51,6 +52,7 @@ impl AudioDaemon {
                 bcast_tx,
                 mpv_tx: mpv_cmd_tx,
                 prefetch_triggered: Arc::new(Mutex::new(false)),
+                tui_clients: Arc::new(Mutex::new(0)),
             },
             mpv_event_rx,
         ))
@@ -402,34 +404,46 @@ impl AudioDaemon {
         let file_path = &self.config.status_file;
         let tmp_path = file_path.with_extension("tmp");
 
-        let (title, artist) = if let Some(t) = &state.current_track {
-            (t.title.clone(), t.artist.clone())
+        let (title, artist, album) = if let Some(t) = &state.current_track {
+            (t.title.clone(), t.artist.clone(), t.album.clone())
         } else {
-            ("Nenhuma reprodução".to_string(), "".to_string())
+            ("Nenhuma reprodução".to_string(), "".to_string(), "".to_string())
         };
 
-        let is_running = state.status != PlaybackStatus::Stopped;
+        let tui_clients = *self.tui_clients.lock().await;
+        let is_tui_open = tui_clients > 0;
+        let is_playing = state.status == PlaybackStatus::Playing;
         let is_paused = state.status == PlaybackStatus::Paused;
         let is_stopped = state.status == PlaybackStatus::Stopped;
 
         let status_json = serde_json::json!({
-            "text": if is_stopped {
-                "🎵 YTM-RS".to_string()
+            "text": if is_playing {
+                format!("▶ {} - {}", artist, title)
             } else if is_paused {
                 format!("⏸ {} - {}", artist, title)
+            } else if is_tui_open {
+                "🎵 YTM-RS (Aberto)".to_string()
             } else {
-                format!("🎵 {} - {}", artist, title)
+                "🎵 YTM-RS".to_string()
             },
-            "tooltip": if is_stopped {
-                "YTM-RS: Parado".to_string()
+            "tooltip": if is_playing {
+                format!("Tocando: {} - {}\nVolume: {}%\nCurtida: {}", title, artist, state.volume, if state.is_liked { "Sim ♥" } else { "Não" })
+            } else if is_paused {
+                format!("Pausado: {} - {}\nVolume: {}%", title, artist, state.volume)
+            } else if is_tui_open {
+                "YTM-RS: Janela aberta (Aguardando reprodução)\nBotão esquerdo: Focar janela\nBotão direito: Controles".to_string()
             } else {
-                format!("Faixa: {}\nArtista: {}\nVolume: {}%\nCurtida: {}", title, artist, state.volume, if state.is_liked { "Sim ♥" } else { "Não" })
+                "YTM-RS: Segundo plano\nBotão esquerdo: Abrir janela\nBotão direito: Controles".to_string()
             },
-            "running": is_running,
+            "running": true,
+            "daemon_running": true,
+            "tui_open": is_tui_open,
+            "playing": is_playing,
             "paused": is_paused,
             "stopped": is_stopped,
             "title": title,
             "artist": artist,
+            "album": album,
             "volume": state.volume,
             "liked": state.is_liked,
             "position": state.position_secs,
@@ -451,12 +465,19 @@ impl AudioDaemon {
             let cmd: DaemonCommand = serde_json::from_str(&line)?;
             match cmd {
                 DaemonCommand::Subscribe => {
+                    // Track TUI client connection
+                    {
+                        let mut count = self.tui_clients.lock().await;
+                        *count += 1;
+                    }
+                    self.write_status_json().await;
+
                     // Send initial state
                     let initial = self.state.lock().await.clone();
                     let resp = DaemonResponse::State(Box::new(initial));
                     let mut json = serde_json::to_string(&resp)?;
                     json.push('\n');
-                    writer.write_all(json.as_bytes()).await?;
+                    let _ = writer.write_all(json.as_bytes()).await;
 
                     let mut rx = self.bcast_tx.subscribe();
                     while let Ok(state) = rx.recv().await {
@@ -467,6 +488,13 @@ impl AudioDaemon {
                             break;
                         }
                     }
+
+                    // TUI client disconnected
+                    {
+                        let mut count = self.tui_clients.lock().await;
+                        *count = count.saturating_sub(1);
+                    }
+                    self.write_status_json().await;
                 }
                 DaemonCommand::GetState => {
                     let state = self.state.lock().await.clone();

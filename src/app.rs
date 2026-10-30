@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use ratatui::widgets::{ListState, TableState};
 use tokio::sync::Mutex;
 use tracing::info;
@@ -12,6 +13,7 @@ use crate::config::AppConfig;
 use crate::innertube::client::InnertubeClient;
 use crate::innertube::Track;
 use crate::theme::Theme;
+use crate::ui::playerbar::{get_player_button_at, PlayerButton};
 use crate::ui::sidebar::SidebarItem;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +40,7 @@ pub struct App {
     pub player_state: PlayerState,
     pub show_help: bool,
     pub should_quit: bool,
+    pub playerbar_area: Rect,
     pub client: InnertubeClient,
     pub db: Arc<Mutex<Database>>,
 }
@@ -86,6 +89,7 @@ impl App {
             player_state: PlayerState::default(),
             show_help: false,
             should_quit: false,
+            playerbar_area: Rect::default(),
             client,
             db,
         })
@@ -331,6 +335,53 @@ impl App {
             }
         }
 
+        Ok(())
+    }
+
+    pub async fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<()> {
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            // Check playerbar button clicks
+            if let Some(btn) = get_player_button_at(mouse.column, mouse.row, self.playerbar_area) {
+                match btn {
+                    PlayerButton::Prev => {
+                        let _ = send_daemon_command(&self.config, DaemonCommand::Prev).await;
+                    }
+                    PlayerButton::PlayPause => {
+                        let _ = send_daemon_command(&self.config, DaemonCommand::Toggle).await;
+                    }
+                    PlayerButton::Next => {
+                        let _ = send_daemon_command(&self.config, DaemonCommand::Next).await;
+                    }
+                    PlayerButton::Like => {
+                        let _ = send_daemon_command(&self.config, DaemonCommand::ToggleLike).await;
+                        self.refresh_data().await;
+                    }
+                    PlayerButton::Radio => {
+                        if let Some(track) = &self.player_state.current_track {
+                            let vid = track.video_id.clone();
+                            let title = track.title.clone();
+                            self.start_radio_for_track(&vid, &title).await;
+                        }
+                    }
+                    PlayerButton::VolDown => {
+                        let _ = send_daemon_command(&self.config, DaemonCommand::VolumeDelta(-5)).await;
+                    }
+                    PlayerButton::VolUp => {
+                        let _ = send_daemon_command(&self.config, DaemonCommand::VolumeDelta(5)).await;
+                    }
+                    PlayerButton::Help => {
+                        self.show_help = !self.show_help;
+                    }
+                }
+                return Ok(());
+            }
+
+            // Clicking top header enters search mode
+            if mouse.row <= 2 {
+                self.active_panel = ActivePanel::Search;
+                return Ok(());
+            }
+        }
         Ok(())
     }
 

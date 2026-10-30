@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, Event, KeyEventKind, EnableMouseCapture, DisableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
@@ -48,6 +48,8 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum CtlAction {
+    /// Foca na janela existente do YTM-RS ou abre uma nova se não existir
+    Focus,
     /// Alterna reprodução / pausa
     Toggle,
     /// Inicia reprodução
@@ -107,6 +109,28 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
 
 async fn run_ctl(config: AppConfig, action: CtlAction) -> Result<()> {
     match action {
+        CtlAction::Focus => {
+            let output = tokio::process::Command::new("hyprctl")
+                .args(["clients", "-j"])
+                .output()
+                .await;
+            let window_exists = if let Ok(out) = output {
+                let json = String::from_utf8_lossy(&out.stdout);
+                json.contains("\"class\": \"ytm-rs\"") || json.contains("\"initialClass\": \"ytm-rs\"")
+            } else {
+                false
+            };
+
+            if window_exists {
+                let _ = tokio::process::Command::new("hyprctl")
+                    .args(["dispatch", "focuswindow", "class:^ytm-rs$"])
+                    .spawn();
+            } else {
+                let _ = tokio::process::Command::new("foot")
+                    .args(["--app-id=ytm-rs", "--title=YTM-RS", "-e", "ytm-rs"])
+                    .spawn();
+            }
+        }
         CtlAction::Toggle => {
             let _ = send_daemon_command(&config, DaemonCommand::Toggle).await?;
         }
@@ -202,7 +226,7 @@ async fn run_tui(config: AppConfig) -> Result<()> {
     // 2. Terminal setup
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -260,10 +284,16 @@ async fn run_tui(config: AppConfig) -> Result<()> {
             .unwrap_or_else(|| Duration::from_millis(0));
 
         if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    app.handle_key_event(key).await?;
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind == KeyEventKind::Press {
+                        app.handle_key_event(key).await?;
+                    }
                 }
+                Event::Mouse(mouse) => {
+                    app.handle_mouse_event(mouse).await?;
+                }
+                _ => {}
             }
         }
 
@@ -278,7 +308,7 @@ async fn run_tui(config: AppConfig) -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     Ok(())

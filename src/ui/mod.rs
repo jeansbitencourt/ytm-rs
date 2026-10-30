@@ -14,15 +14,17 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     let size = f.area();
     let theme = &app.theme;
 
-    // Outer container layout: Header (3) | Content (Min 10) | Player (4)
+    // Outer container layout: Header (3) | Content (Min 8) | Player (5)
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(8),
-            Constraint::Length(4),
+            Constraint::Length(5),
         ])
         .split(size);
+
+    app.playerbar_area = main_chunks[2];
 
     // 1. Header (Search Box on Left + Daemon Status on Right)
     render_header(f, main_chunks[0], app);

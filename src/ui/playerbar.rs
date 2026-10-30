@@ -7,6 +7,52 @@ use ratatui::Frame;
 use crate::audio::{PlaybackStatus, PlayerState};
 use crate::theme::Theme;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerButton {
+    Prev,
+    PlayPause,
+    Next,
+    Like,
+    Radio,
+    VolDown,
+    VolUp,
+    Help,
+}
+
+pub fn get_player_button_at(col: u16, row: u16, playerbar_area: Rect) -> Option<PlayerButton> {
+    let inner_y = playerbar_area.y + 1;
+    let buttons_row = inner_y + 1;
+    if row != buttons_row {
+        return None;
+    }
+
+    let start_x = playerbar_area.x + 10;
+    if col < start_x {
+        return None;
+    }
+
+    let rel_x = col - start_x;
+    if rel_x <= 9 {
+        Some(PlayerButton::Prev)
+    } else if (11..=21).contains(&rel_x) {
+        Some(PlayerButton::PlayPause)
+    } else if (23..=32).contains(&rel_x) {
+        Some(PlayerButton::Next)
+    } else if (35..=44).contains(&rel_x) {
+        Some(PlayerButton::Like)
+    } else if (46..=57).contains(&rel_x) {
+        Some(PlayerButton::Radio)
+    } else if (60..=70).contains(&rel_x) {
+        Some(PlayerButton::VolDown)
+    } else if (72..=82).contains(&rel_x) {
+        Some(PlayerButton::VolUp)
+    } else if (85..=96).contains(&rel_x) {
+        Some(PlayerButton::Help)
+    } else {
+        None
+    }
+}
+
 pub fn render_playerbar(
     f: &mut Frame,
     area: Rect,
@@ -22,7 +68,7 @@ pub fn render_playerbar(
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if inner.height < 2 {
+    if inner.height < 3 {
         return;
     }
 
@@ -40,10 +86,17 @@ pub fn render_playerbar(
     let icon_p = Paragraph::new(icon_lines).alignment(Alignment::Center);
     f.render_widget(icon_p, chunks[0]);
 
-    // Right: Two rows: Row 0 (Title / Artist / Codec) and Row 1 (Progress + Volume)
+    // Right: 3 rows:
+    // Row 0: Title — Artist [Codec tag]
+    // Row 1: Interactive Buttons: [⏮ Prev] [⏯ Play] [⏭ Next] [♥ Like] [📻 Rádio] [🔉 Vol-] [🔊 Vol+] [❓ Ajuda]
+    // Row 2: Progress LineGauge + Total Duration + Volume
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(chunks[1]);
 
     // Row 0: Title — Artist [Opus 160kbps • Background Daemon ON]
@@ -72,7 +125,34 @@ pub fn render_playerbar(
     ]);
     f.render_widget(Paragraph::new(top_line), right_chunks[0]);
 
-    // Row 1: 01:42 ━━━●──────── 04:18  🔊 Vol: 85%
+    // Row 1: Interactive Buttons Row
+    let play_label = if player.status == PlaybackStatus::Playing {
+        "[⏸ Pause]"
+    } else {
+        "[▶ Play ]"
+    };
+
+    let like_style = if player.is_liked {
+        theme.liked_style()
+    } else {
+        theme.muted_style()
+    };
+
+    let btn_style = theme.focused_border_style();
+
+    let buttons_line = Line::from(vec![
+        Span::styled("[⏮ Prev]  ", btn_style),
+        Span::styled(format!("{}  ", play_label), theme.playing_indicator_style()),
+        Span::styled("[⏭ Next]   ", btn_style),
+        Span::styled("[♥ Like]   ", like_style),
+        Span::styled("[📻 Rádio]   ", theme.accent_style()),
+        Span::styled("[🔉 Vol-]  ", theme.text_style()),
+        Span::styled("[🔊 Vol+]   ", theme.text_style()),
+        Span::styled("[❓ Ajuda]", theme.muted_style()),
+    ]);
+    f.render_widget(Paragraph::new(buttons_line), right_chunks[1]);
+
+    // Row 2: 01:42 ━━━●──────── 04:18  🔊 Vol: 85%
     let cur_secs = player.position_secs as u32;
     let dur_secs = player.duration_secs as u32;
 
@@ -85,7 +165,6 @@ pub fn render_playerbar(
         0.0
     };
 
-    // Subdivide Row 1 into: Current Time | Progress LineGauge | Total Time | Volume
     let progress_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -94,7 +173,7 @@ pub fn render_playerbar(
             Constraint::Length(7),
             Constraint::Length(15),
         ])
-        .split(right_chunks[1]);
+        .split(right_chunks[2]);
 
     f.render_widget(Paragraph::new(cur_text).style(theme.muted_style()), progress_chunks[0]);
 
@@ -109,4 +188,25 @@ pub fn render_playerbar(
 
     let vol_text = format!("🔊 Vol: {:>2}%", player.volume);
     f.render_widget(Paragraph::new(vol_text).style(theme.text_style()).alignment(Alignment::Right), progress_chunks[3]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_button_hit_detection() {
+        let area = Rect::new(0, 10, 100, 5);
+        // buttons are at row 10 + 1 (border) + 1 (row 1) = 12
+        assert_eq!(get_player_button_at(12, 12, area), Some(PlayerButton::Prev));
+        assert_eq!(get_player_button_at(24, 12, area), Some(PlayerButton::PlayPause));
+        assert_eq!(get_player_button_at(35, 12, area), Some(PlayerButton::Next));
+        assert_eq!(get_player_button_at(48, 12, area), Some(PlayerButton::Like));
+        assert_eq!(get_player_button_at(60, 12, area), Some(PlayerButton::Radio));
+        assert_eq!(get_player_button_at(72, 12, area), Some(PlayerButton::VolDown));
+        assert_eq!(get_player_button_at(85, 12, area), Some(PlayerButton::VolUp));
+        assert_eq!(get_player_button_at(96, 12, area), Some(PlayerButton::Help));
+        // Wrong row
+        assert_eq!(get_player_button_at(12, 11, area), None);
+    }
 }
