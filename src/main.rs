@@ -293,6 +293,7 @@ async fn run_tui(config: AppConfig) -> Result<()> {
             let s = app_state_shared.lock().await;
             app.player_state = s.clone();
         }
+        app.sync_queue_if_active();
 
         // Check if Omarchy theme changed
         if let Some(watcher) = &theme_watcher {

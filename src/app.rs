@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::audio::daemon::send_daemon_command;
-use crate::audio::{DaemonCommand, PlayerState};
+use crate::audio::{DaemonCommand, DaemonResponse, PlayerState};
 use crate::cache::Database;
 use crate::config::AppConfig;
 use crate::innertube::client::InnertubeClient;
@@ -100,9 +100,37 @@ impl App {
             )
         };
 
-        let active_sidebar_item = SidebarItem::LikedTracks;
-        let displayed_tracks = liked.clone();
-        let active_category_title = "Músicas Curtidas".to_string();
+        let player_state = match send_daemon_command(&config, DaemonCommand::GetState).await {
+            Ok(DaemonResponse::State(s)) => *s,
+            _ => PlayerState::default(),
+        };
+
+        let has_active_playback = player_state.current_track.is_some()
+            || player_state.status == crate::audio::PlaybackStatus::Playing
+            || player_state.status == crate::audio::PlaybackStatus::Paused;
+
+        let (active_sidebar_item, displayed_tracks, active_category_title, sidebar_idx, track_idx) =
+            if has_active_playback && !player_state.queue.is_empty() {
+                let q_idx = player_state.queue_index.min(player_state.queue.len().saturating_sub(1));
+                (
+                    SidebarItem::CurrentQueue,
+                    player_state.queue.clone(),
+                    "Fila / Rádio Atual".to_string(),
+                    2,
+                    q_idx,
+                )
+            } else {
+                (
+                    SidebarItem::LikedTracks,
+                    liked.clone(),
+                    "Músicas Curtidas".to_string(),
+                    0,
+                    0,
+                )
+            };
+
+        sidebar_state.select(Some(sidebar_idx));
+        tracklist_state.select(Some(track_idx));
 
         let mut picker = match Picker::from_termios() {
             Ok(p) => p,
@@ -133,7 +161,7 @@ impl App {
             search_results_artists: Vec::new(),
             previous_view: None,
             is_searching: false,
-            player_state: PlayerState::default(),
+            player_state,
             show_help: false,
             show_auth_modal: false,
             auth_input: String::new(),
@@ -226,6 +254,16 @@ impl App {
         }
     }
 
+    pub fn sync_queue_if_active(&mut self) {
+        if self.content_view == ContentView::Tracks
+            && self.active_sidebar_item == SidebarItem::CurrentQueue
+            && self.previous_view.is_none()
+            && self.displayed_tracks != self.player_state.queue
+        {
+            self.displayed_tracks = self.player_state.queue.clone();
+        }
+    }
+
     pub fn select_sidebar_item(&mut self, item: SidebarItem) {
         self.active_sidebar_item = item;
         self.content_view = ContentView::Tracks;
@@ -234,17 +272,23 @@ impl App {
             SidebarItem::LikedTracks => {
                 self.displayed_tracks = self.liked_tracks.clone();
                 self.active_category_title = "Músicas Curtidas".to_string();
+                self.sidebar_state.select(Some(0));
+                self.tracklist_state.select(Some(0));
             }
             SidebarItem::History => {
                 self.displayed_tracks = self.history_tracks.clone();
                 self.active_category_title = "Histórico Recente".to_string();
+                self.sidebar_state.select(Some(1));
+                self.tracklist_state.select(Some(0));
             }
             SidebarItem::CurrentQueue => {
                 self.displayed_tracks = self.player_state.queue.clone();
                 self.active_category_title = "Fila / Rádio Atual".to_string();
+                self.sidebar_state.select(Some(2));
+                let cur_idx = self.player_state.queue_index.min(self.displayed_tracks.len().saturating_sub(1));
+                self.tracklist_state.select(Some(cur_idx));
             }
         }
-        self.tracklist_state.select(Some(0));
     }
 
     pub async fn handle_key_event(&mut self, key: KeyEvent) -> Result<()> {
