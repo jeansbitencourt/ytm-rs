@@ -404,10 +404,10 @@ impl AudioDaemon {
         let file_path = &self.config.status_file;
         let tmp_path = file_path.with_extension("tmp");
 
-        let (title, artist, album) = if let Some(t) = &state.current_track {
-            (t.title.clone(), t.artist.clone(), t.album.clone())
+        let (title, artist, album, thumbnail_url) = if let Some(t) = &state.current_track {
+            (t.title.clone(), t.artist.clone(), t.album.clone(), t.thumbnail_url.clone())
         } else {
-            ("Nenhuma reprodução".to_string(), "".to_string(), "".to_string())
+            ("Nenhuma reprodução".to_string(), "".to_string(), "".to_string(), "".to_string())
         };
 
         let tui_clients = *self.tui_clients.lock().await;
@@ -444,6 +444,7 @@ impl AudioDaemon {
             "title": title,
             "artist": artist,
             "album": album,
+            "cover_url": thumbnail_url,
             "volume": state.volume,
             "liked": state.is_liked,
             "position": state.position_secs,

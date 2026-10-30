@@ -22,6 +22,7 @@ BarWidget {
   property string trackTitle: ""
   property string trackArtist: ""
   property string trackAlbum: ""
+  property string coverUrl: ""
   property int volume: 75
   property bool isLiked: false
   property double position: 0
@@ -52,6 +53,7 @@ BarWidget {
       root.trackTitle = root.sanitize(data.title || "", 120)
       root.trackArtist = root.sanitize(data.artist || "", 100)
       root.trackAlbum = root.sanitize(data.album || "", 100)
+      root.coverUrl = root.sanitize(data.cover_url || "", 500)
       root.volume = typeof data.volume === "number" ? Math.max(0, Math.min(100, Math.round(data.volume))) : 75
       root.isLiked = data.liked === true
       root.position = Number(data.position || 0)
@@ -156,6 +158,19 @@ BarWidget {
           radius: Style.spacing.labelGap
           color: Style.normalFillFor(root.bar ? root.bar.foreground : "#ffffff", Commons.Color.accent)
           borderSpec: Border.controlSpec("normal", root.bar ? root.bar.foreground : "#ffffff", Commons.Color.accent)
+          clip: true
+
+          Image {
+            id: coverImage
+            anchors.fill: parent
+            source: root.coverUrl
+            fillMode: Image.PreserveAspectCrop
+            visible: status === Image.Ready && root.coverUrl !== ""
+            asynchronous: true
+            cache: true
+            mipmap: true
+            smooth: true
+          }
 
           Text {
             anchors.centerIn: parent
@@ -163,6 +178,7 @@ BarWidget {
             color: Commons.Color.accent
             font.pixelSize: Style.font.displayMedium
             font.bold: true
+            visible: !coverImage.visible
           }
         }
 
