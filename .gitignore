@@ -1,0 +1,8 @@
+/target/
+/build/
+/pkgbuild/pkg/
+/pkgbuild/src/
+/pkgbuild/ytm-rs-*.pkg.tar.*
+*.sock
+*.db
+*.log
