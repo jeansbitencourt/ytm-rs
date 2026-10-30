@@ -441,9 +441,21 @@ impl App {
                 return Ok(());
             }
 
-            // Clicking top header enters search mode
+            if self.show_help {
+                self.show_help = false;
+                return Ok(());
+            }
+
+            // Clicking top header: left side enters search, right side opens auth
             if mouse.row <= 2 {
-                self.active_panel = ActivePanel::Search;
+                let search_width = (self.playerbar_area.width * 52) / 100;
+                if mouse.column >= search_width {
+                    self.show_auth_modal = true;
+                    self.auth_input.clear();
+                    self.auth_message = None;
+                } else {
+                    self.active_panel = ActivePanel::Search;
+                }
                 return Ok(());
             }
         }

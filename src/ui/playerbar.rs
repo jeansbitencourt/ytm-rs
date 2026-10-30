@@ -27,7 +27,7 @@ pub fn get_player_button_at(col: u16, row: u16, playerbar_area: Rect) -> Option<
         return None;
     }
 
-    let start_x = playerbar_area.x + 10;
+    let start_x = playerbar_area.x + 9;
     if col < start_x {
         return None;
     }
@@ -35,21 +35,21 @@ pub fn get_player_button_at(col: u16, row: u16, playerbar_area: Rect) -> Option<
     let rel_x = col - start_x;
     if rel_x <= 9 {
         Some(PlayerButton::Prev)
-    } else if (11..=21).contains(&rel_x) {
+    } else if (10..=20).contains(&rel_x) {
         Some(PlayerButton::PlayPause)
-    } else if (23..=32).contains(&rel_x) {
+    } else if (21..=31).contains(&rel_x) {
         Some(PlayerButton::Next)
-    } else if (35..=44).contains(&rel_x) {
+    } else if (32..=42).contains(&rel_x) {
         Some(PlayerButton::Like)
-    } else if (46..=57).contains(&rel_x) {
+    } else if (43..=55).contains(&rel_x) {
         Some(PlayerButton::Radio)
-    } else if (60..=70).contains(&rel_x) {
+    } else if (56..=66).contains(&rel_x) {
         Some(PlayerButton::VolDown)
-    } else if (72..=82).contains(&rel_x) {
+    } else if (67..=78).contains(&rel_x) {
         Some(PlayerButton::VolUp)
-    } else if (85..=95).contains(&rel_x) {
+    } else if (79..=91).contains(&rel_x) {
         Some(PlayerButton::Account)
-    } else if (97..=108).contains(&rel_x) {
+    } else if (92..=103).contains(&rel_x) {
         Some(PlayerButton::Help)
     } else {
         None
@@ -201,17 +201,23 @@ mod tests {
     #[test]
     fn test_button_hit_detection() {
         let area = Rect::new(0, 10, 120, 5);
-        // buttons are at row 10 + 1 (border) + 1 (row 1) = 12
-        assert_eq!(get_player_button_at(12, 12, area), Some(PlayerButton::Prev));
-        assert_eq!(get_player_button_at(24, 12, area), Some(PlayerButton::PlayPause));
-        assert_eq!(get_player_button_at(35, 12, area), Some(PlayerButton::Next));
-        assert_eq!(get_player_button_at(48, 12, area), Some(PlayerButton::Like));
-        assert_eq!(get_player_button_at(60, 12, area), Some(PlayerButton::Radio));
-        assert_eq!(get_player_button_at(72, 12, area), Some(PlayerButton::VolDown));
-        assert_eq!(get_player_button_at(85, 12, area), Some(PlayerButton::VolUp));
-        assert_eq!(get_player_button_at(96, 12, area), Some(PlayerButton::Account));
-        assert_eq!(get_player_button_at(108, 12, area), Some(PlayerButton::Help));
+        // buttons start at area.x + 9 = 9; row is 10 + 1 (border) + 1 (row 1) = 12
+        assert_eq!(get_player_button_at(9, 12, area), Some(PlayerButton::Prev));
+        assert_eq!(get_player_button_at(18, 12, area), Some(PlayerButton::Prev));
+        assert_eq!(get_player_button_at(20, 12, area), Some(PlayerButton::PlayPause));
+        assert_eq!(get_player_button_at(32, 12, area), Some(PlayerButton::Next));
+        assert_eq!(get_player_button_at(44, 12, area), Some(PlayerButton::Like));
+        assert_eq!(get_player_button_at(55, 12, area), Some(PlayerButton::Radio));
+        assert_eq!(get_player_button_at(68, 12, area), Some(PlayerButton::VolDown));
+        assert_eq!(get_player_button_at(80, 12, area), Some(PlayerButton::VolUp));
+        // Account button is at rel_x 79..=91 => col 88..=100
+        assert_eq!(get_player_button_at(88, 12, area), Some(PlayerButton::Account));
+        assert_eq!(get_player_button_at(95, 12, area), Some(PlayerButton::Account));
+        assert_eq!(get_player_button_at(100, 12, area), Some(PlayerButton::Account));
+        // Help button is at rel_x 92..=103 => col 101..=112
+        assert_eq!(get_player_button_at(103, 12, area), Some(PlayerButton::Help));
+        assert_eq!(get_player_button_at(110, 12, area), Some(PlayerButton::Help));
         // Wrong row
-        assert_eq!(get_player_button_at(12, 11, area), None);
+        assert_eq!(get_player_button_at(88, 11, area), None);
     }
 }
