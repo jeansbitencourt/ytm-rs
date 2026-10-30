@@ -204,9 +204,9 @@ fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &App)
     let chip = |filter: SearchFilter| {
         let is_active = app.search_filter == filter;
         if is_active {
-            Span::styled(format!("[{}]", filter.label()), theme.playing_indicator_style().add_modifier(Modifier::BOLD))
+            Span::styled(format!("[{}]", filter.label()), theme.selected_row_style())
         } else {
-            Span::styled(format!("[{}]", filter.label()), theme.focused_border_style())
+            Span::styled(format!("[{}]", filter.label()), theme.muted_style())
         }
     };
 

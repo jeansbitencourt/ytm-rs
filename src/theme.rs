@@ -133,7 +133,7 @@ impl Theme {
 
     // Styling helpers for Ratatui widgets
     pub fn default_block_style(&self) -> Style {
-        Style::default().bg(self.background).fg(self.foreground)
+        Style::default().fg(self.foreground)
     }
 
     pub fn focused_border_style(&self) -> Style {
