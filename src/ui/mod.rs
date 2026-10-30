@@ -28,8 +28,14 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
     app.playerbar_area = main_chunks[2];
 
+    let header_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
+        .split(main_chunks[0]);
+    app.header_search_area = header_chunks[0];
+
     // 1. Header (Search Box on Left + Daemon Status on Right)
-    render_header(f, main_chunks[0], app);
+    render_header(f, header_chunks[0], header_chunks[1], app);
 
     // 2. Middle Content (Sidebar 28% + Main View 72%)
     let content_chunks = Layout::default()
@@ -165,12 +171,28 @@ fn render_cover_art(
     }
 }
 
-fn render_header(f: &mut Frame, area: Rect, app: &App) {
+pub fn get_search_filter_button_at(col: u16, row: u16, search_area: Rect) -> Option<SearchFilter> {
+    if row > search_area.y + 1 {
+        return None;
+    }
+    let start_x = search_area.x + 1;
+    if col < start_x + 27 {
+        return None;
+    }
+    let rel_x = col - start_x;
+    if (27..=40).contains(&rel_x) {
+        Some(SearchFilter::Tracks)
+    } else if (41..=52).contains(&rel_x) {
+        Some(SearchFilter::Albums)
+    } else if (53..=67).contains(&rel_x) {
+        Some(SearchFilter::Artists)
+    } else {
+        None
+    }
+}
+
+fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &App) {
     let theme = &app.theme;
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
-        .split(area);
 
     let is_search_focused = app.active_panel == ActivePanel::Search;
     let search_border_style = if is_search_focused {
@@ -184,7 +206,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         if is_active {
             Span::styled(format!("[{}]", filter.label()), theme.playing_indicator_style().add_modifier(Modifier::BOLD))
         } else {
-            Span::styled(format!(" {} ", filter.label()), theme.muted_style())
+            Span::styled(format!("[{}]", filter.label()), theme.focused_border_style())
         }
     };
 
@@ -222,7 +244,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     ]);
 
     let search_p = Paragraph::new(search_line).block(search_block);
-    f.render_widget(search_p, chunks[0]);
+    f.render_widget(search_p, search_area);
 
     // Right: Status indicator with Account info
     let status_block = Block::default()
@@ -249,7 +271,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     let status_p = Paragraph::new(status_line)
         .block(status_block)
         .alignment(Alignment::Right);
-    f.render_widget(status_p, chunks[1]);
+    f.render_widget(status_p, status_area);
 }
 
 fn render_help_modal(f: &mut Frame, area: Rect, app: &App) {
@@ -424,3 +446,37 @@ fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
     let p_footer = Paragraph::new(footer_line).alignment(Alignment::Right);
     f.render_widget(p_footer, chunks[4]);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Rect;
+    use crate::innertube::SearchFilter;
+
+    #[test]
+    fn test_search_filter_button_hit_detection() {
+        let search_area = Rect::new(0, 0, 80, 3);
+
+        // Outside row range
+        assert_eq!(get_search_filter_button_at(30, 2, search_area), None);
+
+        // Before first button
+        assert_eq!(get_search_filter_button_at(10, 0, search_area), None);
+
+        // Tracks button: offsets 27..=40 (col 28..=41 since start_x = 1)
+        assert_eq!(get_search_filter_button_at(28, 0, search_area), Some(SearchFilter::Tracks));
+        assert_eq!(get_search_filter_button_at(41, 0, search_area), Some(SearchFilter::Tracks));
+
+        // Albums button: offsets 41..=52 (col 42..=53)
+        assert_eq!(get_search_filter_button_at(42, 0, search_area), Some(SearchFilter::Albums));
+        assert_eq!(get_search_filter_button_at(53, 0, search_area), Some(SearchFilter::Albums));
+
+        // Artists button: offsets 53..=67 (col 54..=68)
+        assert_eq!(get_search_filter_button_at(54, 0, search_area), Some(SearchFilter::Artists));
+        assert_eq!(get_search_filter_button_at(68, 0, search_area), Some(SearchFilter::Artists));
+
+        // Beyond artists button
+        assert_eq!(get_search_filter_button_at(70, 0, search_area), None);
+    }
+}
+

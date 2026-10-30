@@ -61,6 +61,7 @@ pub struct App {
     pub auth_message: Option<(String, bool)>,
     pub should_quit: bool,
     pub playerbar_area: Rect,
+    pub header_search_area: Rect,
     pub client: InnertubeClient,
     pub auth: crate::innertube::auth::AuthConfig,
     pub db: Arc<Mutex<Database>>,
@@ -168,6 +169,7 @@ impl App {
             auth_message: None,
             should_quit: false,
             playerbar_area: Rect::default(),
+            header_search_area: Rect::default(),
             client,
             auth,
             db,
@@ -725,9 +727,23 @@ impl App {
                 return Ok(());
             }
 
+            // Check if search filter buttons were clicked
+            if let Some(filter) = crate::ui::get_search_filter_button_at(mouse.column, mouse.row, self.header_search_area) {
+                self.search_filter = filter;
+                self.active_panel = ActivePanel::Search;
+                if !self.search_input.trim().is_empty() {
+                    self.perform_search().await;
+                }
+                return Ok(());
+            }
+
             // Clicking top header: left side enters search, right side opens auth
             if mouse.row <= 2 {
-                let search_width = (self.playerbar_area.width * 55) / 100;
+                let search_width = if self.header_search_area.width > 0 {
+                    self.header_search_area.x + self.header_search_area.width
+                } else {
+                    (self.playerbar_area.width * 56) / 100
+                };
                 if mouse.column >= search_width {
                     self.show_auth_modal = true;
                     self.auth_input.clear();
