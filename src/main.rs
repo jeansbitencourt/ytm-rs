@@ -110,25 +110,51 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
 async fn run_ctl(config: AppConfig, action: CtlAction) -> Result<()> {
     match action {
         CtlAction::Focus => {
-            let output = tokio::process::Command::new("hyprctl")
+            // Check if a window with class ytm-rs already exists in Hyprland
+            let output = std::process::Command::new("hyprctl")
                 .args(["clients", "-j"])
-                .output()
-                .await;
-            let window_exists = if let Ok(out) = output {
-                let json = String::from_utf8_lossy(&out.stdout);
-                json.contains("\"class\": \"ytm-rs\"") || json.contains("\"initialClass\": \"ytm-rs\"")
-            } else {
-                false
-            };
+                .output();
+            let mut window_address = None;
+            let mut window_monitor = None;
+            if let Ok(out) = output {
+                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                    if let Some(arr) = val.as_array() {
+                        for client in arr {
+                            let class = client.get("class").and_then(|c| c.as_str()).unwrap_or("");
+                            let initial_class = client.get("initialClass").and_then(|c| c.as_str()).unwrap_or("");
+                            if class == "ytm-rs" || initial_class == "ytm-rs" {
+                                if let Some(addr) = client.get("address").and_then(|a| a.as_str()) {
+                                    window_address = Some(addr.to_string());
+                                }
+                                if let Some(mon) = client.get("monitor").and_then(|m| m.as_i64()) {
+                                    window_monitor = Some(mon);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
 
-            if window_exists {
-                let _ = tokio::process::Command::new("hyprctl")
-                    .args(["dispatch", "focuswindow", "class:^ytm-rs$"])
-                    .spawn();
+            if let Some(addr) = window_address {
+                let lua_cmd = if let Some(mon) = window_monitor {
+                    format!(
+                        "hl.dispatch(hl.dsp.focus({{ monitor = '{}' }})); hl.dispatch(hl.dsp.focus({{ window = 'address:{}' }}))",
+                        mon, addr
+                    )
+                } else {
+                    format!("hl.dispatch(hl.dsp.focus({{ window = 'address:{}' }}))", addr)
+                };
+                let _ = std::process::Command::new("hyprctl")
+                    .args(["eval", &lua_cmd])
+                    .output();
             } else {
-                let _ = tokio::process::Command::new("foot")
-                    .args(["--app-id=ytm-rs", "--title=YTM-RS", "-e", "ytm-rs"])
-                    .spawn();
+                let _ = std::process::Command::new("setsid")
+                    .args(["-f", "uwsm-app", "--", "foot", "--app-id=ytm-rs", "--title=YTM-RS", "-e", "ytm-rs"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
             }
         }
         CtlAction::Toggle => {

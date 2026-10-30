@@ -12,6 +12,8 @@ BarWidget {
   moduleName: "jeansbitencourt.ytm-rs"
 
   property bool popupOpen: false
+  function close() { popupOpen = false }
+
   property bool daemonRunning: false
   property bool tuiOpen: false
   property bool isPlaying: false
@@ -55,18 +57,16 @@ BarWidget {
       root.position = Number(data.position || 0)
       root.duration = Number(data.duration || 0)
     } catch (e) {
-      // Ignora erro transitório de JSON
+      // Ignora erro transitório durante escrita atômica
     }
   }
 
-  function runCli(args) {
-    cliProcess.command = ["ytm-rs", "ctl"].concat(args)
-    cliProcess.running = true
-  }
-
-  Process {
-    id: cliProcess
-    command: []
+  function runCommand(cmd) {
+    if (root.bar && typeof root.bar.run === "function") {
+      root.bar.run(cmd)
+    } else {
+      Util.execDetached(cmd)
+    }
   }
 
   FileView {
@@ -101,33 +101,31 @@ BarWidget {
       ? "YTM-RS: Segundo plano ativo\nBotão esquerdo: Abrir | Botão direito: Menu"
       : "YTM-RS (YouTube Music)\nBotão esquerdo: Abrir | Botão direito: Menu"
 
-    onPressed: function(mouseButton) {
-      if (!root.bar) return
-
-      if (mouseButton === Qt.LeftButton) {
-        // Foca na janela existente ou abre se não existir
-        root.runCli(["focus"])
+    onPressed: function(button) {
+      if (button === Qt.LeftButton) {
+        // Foca na janela existente ou abre uma nova
+        root.runCommand("ytm-rs ctl focus")
         return
       }
 
-      if (mouseButton === Qt.RightButton) {
-        // Abre modal com controles completos
+      if (button === Qt.RightButton) {
+        // Abre / fecha modal de controles
         root.popupOpen = !root.popupOpen
         return
       }
 
-      if (mouseButton === Qt.MiddleButton) {
+      if (button === Qt.MiddleButton) {
         // Curtir música atual
-        root.runCli(["like"])
+        root.runCommand("ytm-rs ctl like")
         return
       }
     }
 
     onWheelMoved: function(delta) {
       if (delta > 0) {
-        root.runCli(["vol-up"])
+        root.runCommand("ytm-rs ctl vol-up")
       } else if (delta < 0) {
-        root.runCli(["vol-down"])
+        root.runCommand("ytm-rs ctl vol-down")
       }
     }
   }
@@ -135,7 +133,7 @@ BarWidget {
   // Modal PopupCard com controles avançados ao clicar com o botão direito
   PopupCard {
     id: popup
-    anchorItem: root
+    anchorItem: button
     bar: root.bar
     owner: root
     open: root.popupOpen
@@ -144,17 +142,17 @@ BarWidget {
 
     Column {
       id: modalColumn
-      anchors.fill: parent
+      width: parent.width
       spacing: Style.space(10)
 
-      // 1. Cabeçalho: Capa / Ícone + Título e Artista
+      // 1. Cabeçalho: Ícone + Título e Artista
       Row {
         width: parent.width
         spacing: Style.space(12)
 
         BorderSurface {
-          width: Style.space(56)
-          height: Style.space(56)
+          width: Style.space(52)
+          height: Style.space(52)
           radius: Style.spacing.labelGap
           color: Style.normalFillFor(root.bar ? root.bar.foreground : "#ffffff", Commons.Color.accent)
           borderSpec: Border.controlSpec("normal", root.bar ? root.bar.foreground : "#ffffff", Commons.Color.accent)
@@ -169,7 +167,7 @@ BarWidget {
         }
 
         Column {
-          width: parent.width - Style.space(68)
+          width: parent.width - Style.space(64)
           spacing: Style.space(3)
 
           Text {
@@ -224,37 +222,37 @@ BarWidget {
       // 3. Botões de Controle de Reprodução
       Row {
         anchors.horizontalCenter: parent.horizontalCenter
-        spacing: Style.space(8)
+        spacing: Style.space(12)
 
         Button {
           text: "⏮"
-          onClicked: root.runCli(["prev"])
+          onClicked: root.runCommand("ytm-rs ctl prev")
         }
 
         Button {
-          text: root.isPlaying ? "⏸" : "▶"
-          onClicked: root.runCli(["toggle"])
+          text: root.isPlaying ? "⏸ Pausar" : "▶ Tocar"
+          onClicked: root.runCommand("ytm-rs ctl toggle")
         }
 
         Button {
           text: "⏭"
-          onClicked: root.runCli(["next"])
+          onClicked: root.runCommand("ytm-rs ctl next")
         }
 
         Button {
           text: root.isLiked ? "♥" : "♡"
-          onClicked: root.runCli(["like"])
+          onClicked: root.runCommand("ytm-rs ctl like")
         }
       }
 
       // 4. Controle de Volume
       Row {
         anchors.horizontalCenter: parent.horizontalCenter
-        spacing: Style.space(10)
+        spacing: Style.space(12)
 
         Button {
           text: "🔉 -"
-          onClicked: root.runCli(["vol-down"])
+          onClicked: root.runCommand("ytm-rs ctl vol-down")
         }
 
         Text {
@@ -266,7 +264,7 @@ BarWidget {
 
         Button {
           text: "🔊 +"
-          onClicked: root.runCli(["vol-up"])
+          onClicked: root.runCommand("ytm-rs ctl vol-up")
         }
       }
 
@@ -280,16 +278,14 @@ BarWidget {
           text: "Focar Janela"
           onClicked: {
             root.popupOpen = false
-            root.runCli(["focus"])
+            root.runCommand("ytm-rs ctl focus")
           }
         }
 
         Button {
           width: (parent.width - Style.space(8)) / 2
           text: "Parar"
-          onClicked: {
-            root.runCli(["stop"])
-          }
+          onClicked: root.runCommand("ytm-rs ctl stop")
         }
       }
     }

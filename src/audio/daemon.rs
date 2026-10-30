@@ -480,12 +480,27 @@ impl AudioDaemon {
                     let _ = writer.write_all(json.as_bytes()).await;
 
                     let mut rx = self.bcast_tx.subscribe();
-                    while let Ok(state) = rx.recv().await {
-                        let resp = DaemonResponse::State(Box::new(state));
-                        let mut line = serde_json::to_string(&resp)?;
-                        line.push('\n');
-                        if writer.write_all(line.as_bytes()).await.is_err() {
-                            break;
+                    loop {
+                        tokio::select! {
+                            res = lines.next_line() => {
+                                match res {
+                                    Ok(Some(_)) => {}
+                                    _ => break,
+                                }
+                            }
+                            state = rx.recv() => {
+                                match state {
+                                    Ok(state) => {
+                                        let resp = DaemonResponse::State(Box::new(state));
+                                        let mut line = serde_json::to_string(&resp)?;
+                                        line.push('\n');
+                                        if writer.write_all(line.as_bytes()).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
                         }
                     }
 
