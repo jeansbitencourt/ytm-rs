@@ -111,6 +111,8 @@ impl AudioDaemon {
         });
 
         if let Ok(mut mpris) = crate::topbar::mpris::MprisServer::new(mpris_cmd_tx) {
+            let initial_state = self.state.lock().await.clone();
+            mpris.update(&initial_state);
             let mut state_rx = self.bcast_tx.subscribe();
             tokio::spawn(async move {
                 while let Ok(state) = state_rx.recv().await {

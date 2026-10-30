@@ -21,7 +21,6 @@ impl MprisServer {
 
         match MediaControls::new(config) {
             Ok(mut controls) => {
-                let tx = cmd_tx.clone();
                 let attach_res = controls.attach(move |event: MediaControlEvent| {
                     let cmd = match event {
                         MediaControlEvent::Play => Some(DaemonCommand::Play),
@@ -38,10 +37,7 @@ impl MprisServer {
                     };
 
                     if let Some(c) = cmd {
-                        let tx = tx.clone();
-                        tokio::spawn(async move {
-                            let _ = tx.send(c).await;
-                        });
+                        let _ = cmd_tx.try_send(c);
                     }
                 });
 
@@ -68,13 +64,14 @@ impl MprisServer {
             None => return,
         };
 
+        let pos_dur = Duration::try_from_secs_f64(state.position_secs.max(0.0)).unwrap_or(Duration::ZERO);
+        let pos = MediaPosition(pos_dur);
+
         let playback = match state.status {
             PlaybackStatus::Playing => {
-                let pos = MediaPosition(Duration::from_secs_f64(state.position_secs));
                 MediaPlayback::Playing { progress: Some(pos) }
             }
             PlaybackStatus::Paused => {
-                let pos = MediaPosition(Duration::from_secs_f64(state.position_secs));
                 MediaPlayback::Paused { progress: Some(pos) }
             }
             PlaybackStatus::Stopped => MediaPlayback::Stopped,
@@ -106,5 +103,36 @@ impl MprisServer {
             };
             let _ = controls.set_metadata(metadata);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_mpris_event_from_non_tokio_thread() {
+        let (cmd_tx, mut rx) = mpsc::channel(32);
+
+        // Simulate souvlaki calling the closure in an external OS thread with NO Tokio runtime
+        let thread_handle = std::thread::spawn(move || {
+            let res = cmd_tx.try_send(DaemonCommand::Toggle);
+            assert!(res.is_ok(), "try_send must succeed from a non-tokio thread");
+        });
+
+        thread_handle.join().expect("thread join failed");
+        let received = rx.recv().await;
+        assert_eq!(received, Some(DaemonCommand::Toggle));
+    }
+
+    #[test]
+    fn test_duration_safe_conversion() {
+        let neg_pos: f64 = -5.0;
+        let pos_dur = Duration::try_from_secs_f64(neg_pos.max(0.0)).unwrap_or(Duration::ZERO);
+        assert_eq!(pos_dur, Duration::ZERO);
+
+        let valid_pos: f64 = 12.34;
+        let pos_dur_valid = Duration::try_from_secs_f64(valid_pos.max(0.0)).unwrap_or(Duration::ZERO);
+        assert_eq!(pos_dur_valid.as_secs(), 12);
     }
 }
