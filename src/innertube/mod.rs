@@ -52,3 +52,68 @@ pub struct PlaylistSummary {
     pub count_text: String,
     pub thumbnail_url: String,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SearchFilter {
+    Tracks,
+    Albums,
+    Artists,
+}
+
+impl SearchFilter {
+    pub const ALL: [SearchFilter; 3] = [
+        SearchFilter::Tracks,
+        SearchFilter::Albums,
+        SearchFilter::Artists,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            SearchFilter::Tracks => "🎵 Músicas",
+            SearchFilter::Albums => "💿 Álbuns",
+            SearchFilter::Artists => "🎤 Artistas",
+        }
+    }
+
+    pub fn params(&self) -> &'static str {
+        match self {
+            SearchFilter::Tracks => "EgWKAQIIAWoSEAUQCRADEAQQDhAQEAoQFRAR",
+            SearchFilter::Albums => "EgWKAQIYAWoSEAUQCRADEAQQDhAQEAoQFRAR",
+            SearchFilter::Artists => "EgWKAQIgAWoSEAUQCRADEAQQDhAQEAoQFRAR",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            SearchFilter::Tracks => SearchFilter::Albums,
+            SearchFilter::Albums => SearchFilter::Artists,
+            SearchFilter::Artists => SearchFilter::Tracks,
+        }
+    }
+
+    pub fn prev(&self) -> Self {
+        match self {
+            SearchFilter::Tracks => SearchFilter::Artists,
+            SearchFilter::Albums => SearchFilter::Tracks,
+            SearchFilter::Artists => SearchFilter::Albums,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlbumSummary {
+    pub browse_id: String,
+    pub playlist_id: Option<String>,
+    pub title: String,
+    pub artist: String,
+    pub year: String,
+    pub thumbnail_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtistSummary {
+    pub browse_id: String,
+    pub name: String,
+    pub subscribers_text: String,
+    pub thumbnail_url: String,
+}

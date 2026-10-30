@@ -301,6 +301,9 @@ async fn run_tui(config: AppConfig) -> Result<()> {
             }
         }
 
+        // Update cover art state if needed
+        app.update_cover_if_needed();
+
         // Draw UI
         terminal.draw(|f| ui::render_ui(f, &mut app))?;
 

@@ -1,8 +1,46 @@
 use ytm_rs::audio::{DaemonCommand, DaemonResponse};
 use ytm_rs::cache::Database;
-use ytm_rs::innertube::client::parse_duration_to_secs;
-use ytm_rs::innertube::Track;
+use ytm_rs::innertube::auth::AuthConfig;
+use ytm_rs::innertube::client::{parse_duration_to_secs, InnertubeClient};
+use ytm_rs::innertube::{SearchFilter, Track};
 use ytm_rs::theme::{parse_hex_color, Theme};
+
+#[test]
+fn test_search_filters() {
+    let f = SearchFilter::Tracks;
+    assert_eq!(f.next(), SearchFilter::Albums);
+    assert_eq!(f.next().next(), SearchFilter::Artists);
+    assert_eq!(f.next().next().next(), SearchFilter::Tracks);
+    assert_eq!(f.prev(), SearchFilter::Artists);
+}
+
+#[tokio::test]
+async fn test_innertube_album_and_artist_search_live() {
+    let client = InnertubeClient::new(AuthConfig::default());
+
+    // Search albums
+    let albums = client.search_albums("Random Access Memories").await.unwrap();
+    assert!(!albums.is_empty(), "Should find albums for Random Access Memories");
+    let album = &albums[0];
+    assert!(!album.browse_id.is_empty());
+
+    // Browse album tracks
+    let (album_title, tracks) = client.get_album_tracks(&album.browse_id).await.unwrap();
+    assert!(!album_title.is_empty());
+    assert!(!tracks.is_empty(), "Album should contain tracks");
+    assert!(!tracks[0].video_id.is_empty());
+
+    // Search artists
+    let artists = client.search_artists("Daft Punk").await.unwrap();
+    assert!(!artists.is_empty(), "Should find artists for Daft Punk");
+    let artist = &artists[0];
+    assert!(!artist.browse_id.is_empty());
+
+    // Browse artist tracks
+    let (artist_name, artist_tracks) = client.get_artist_tracks(&artist.browse_id).await.unwrap();
+    assert!(!artist_name.is_empty());
+    assert!(!artist_tracks.is_empty(), "Artist should have tracks available");
+}
 
 #[test]
 fn test_theme_omarchy_colors() {

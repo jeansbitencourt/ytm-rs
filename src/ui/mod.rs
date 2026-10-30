@@ -3,8 +3,10 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
+use ratatui_image::StatefulImage;
 
-use crate::app::{ActivePanel, App};
+use crate::app::{ActivePanel, ContentView, App};
+use crate::innertube::SearchFilter;
 
 pub mod playerbar;
 pub mod sidebar;
@@ -29,11 +31,17 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     // 1. Header (Search Box on Left + Daemon Status on Right)
     render_header(f, main_chunks[0], app);
 
-    // 2. Middle Content (Sidebar 28% + Tracklist 72%)
+    // 2. Middle Content (Sidebar 28% + Main View 72%)
     let content_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(28), Constraint::Percentage(72)])
         .split(main_chunks[1]);
+
+    // Split left side into Library (top) and Album Cover (bottom)
+    let sidebar_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(7), Constraint::Min(6)])
+        .split(content_chunks[0]);
 
     let counts = (
         app.liked_tracks.len(),
@@ -44,28 +52,62 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     let is_sidebar_focused = app.active_panel == ActivePanel::Sidebar;
     sidebar::render_sidebar(
         f,
-        content_chunks[0],
+        sidebar_chunks[0],
         theme,
         &mut app.sidebar_state,
         is_sidebar_focused,
         counts,
     );
 
+    render_cover_art(
+        f,
+        sidebar_chunks[1],
+        theme,
+        &mut app.cover_protocol,
+        app.player_state.current_track.is_some(),
+    );
+
     let is_tracklist_focused = app.active_panel == ActivePanel::Tracklist;
     let current_vid = app.player_state.current_track.as_ref().map(|t| t.video_id.as_str());
     let is_playing = app.player_state.status == crate::audio::PlaybackStatus::Playing;
 
-    tracklist::render_tracklist(
-        f,
-        content_chunks[1],
-        theme,
-        &app.active_category_title,
-        &app.displayed_tracks,
-        current_vid,
-        is_playing,
-        &mut app.tracklist_state,
-        is_tracklist_focused,
-    );
+    match app.content_view {
+        ContentView::Tracks => {
+            tracklist::render_tracklist(
+                f,
+                content_chunks[1],
+                theme,
+                &app.active_category_title,
+                &app.displayed_tracks,
+                current_vid,
+                is_playing,
+                &mut app.tracklist_state,
+                is_tracklist_focused,
+            );
+        }
+        ContentView::Albums => {
+            tracklist::render_album_list(
+                f,
+                content_chunks[1],
+                theme,
+                &app.active_category_title,
+                &app.search_results_albums,
+                &mut app.album_table_state,
+                is_tracklist_focused,
+            );
+        }
+        ContentView::Artists => {
+            tracklist::render_artist_list(
+                f,
+                content_chunks[1],
+                theme,
+                &app.active_category_title,
+                &app.search_results_artists,
+                &mut app.artist_table_state,
+                is_tracklist_focused,
+            );
+        }
+    }
 
     // 3. Player Bar
     playerbar::render_playerbar(f, main_chunks[2], theme, &app.player_state);
@@ -81,11 +123,53 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     }
 }
 
+fn render_cover_art(
+    f: &mut Frame,
+    area: Rect,
+    theme: &crate::theme::Theme,
+    cover_protocol: &mut Option<Box<dyn ratatui_image::protocol::StatefulProtocol>>,
+    is_playing: bool,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme.unfocused_border_style())
+        .title(Span::styled(" ♫ Capa em Reprodução ", theme.title_style()))
+        .style(theme.default_block_style());
+
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner_area.width < 4 || inner_area.height < 2 {
+        return;
+    }
+
+    if let Some(protocol) = cover_protocol {
+        let image_widget = StatefulImage::new(None);
+        f.render_stateful_widget(image_widget, inner_area, protocol);
+    } else {
+        let placeholder = if is_playing {
+            vec![
+                Line::from(""),
+                Line::from(Span::styled("⏳ Carregando capa...", theme.muted_style())),
+            ]
+        } else {
+            vec![
+                Line::from(""),
+                Line::from(Span::styled("♫", theme.title_style())),
+                Line::from(Span::styled("YTM-RS", theme.muted_style())),
+            ]
+        };
+        let p = Paragraph::new(placeholder).alignment(Alignment::Center);
+        f.render_widget(p, inner_area);
+    }
+}
+
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
     let theme = &app.theme;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
         .split(area);
 
     let is_search_focused = app.active_panel == ActivePanel::Search;
@@ -95,17 +179,37 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         theme.unfocused_border_style()
     };
 
+    let chip = |filter: SearchFilter| {
+        let is_active = app.search_filter == filter;
+        if is_active {
+            Span::styled(format!("[{}]", filter.label()), theme.playing_indicator_style().add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(format!(" {} ", filter.label()), theme.muted_style())
+        }
+    };
+
+    let title_line = Line::from(vec![
+        Span::styled(" Busca [/] ── Filtro [Tab]: ", theme.title_style()),
+        chip(SearchFilter::Tracks),
+        Span::raw(" "),
+        chip(SearchFilter::Albums),
+        Span::raw(" "),
+        chip(SearchFilter::Artists),
+        Span::raw(" "),
+    ]);
+
     let search_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(search_border_style)
+        .title(title_line)
         .style(theme.default_block_style());
 
     let search_text = if app.search_input.is_empty() {
         if is_search_focused {
             Span::styled("█", theme.accent_style())
         } else {
-            Span::styled("pressione '/' para buscar músicas, artistas ou álbuns...", theme.muted_style())
+            Span::styled("digite para buscar músicas, álbuns ou artistas...", theme.muted_style())
         }
     } else {
         let cursor = if is_search_focused { "█" } else { "" };
@@ -113,7 +217,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let search_line = Line::from(vec![
-        Span::styled("🔍 Buscar [/]: ", theme.accent_style().add_modifier(Modifier::BOLD)),
+        Span::styled("🔍 ", theme.accent_style().add_modifier(Modifier::BOLD)),
         search_text,
     ]);
 
@@ -128,9 +232,9 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         .style(theme.default_block_style());
 
     let auth_span = if app.auth.is_authenticated() {
-        Span::styled("👤 Conta: Conectada", theme.playing_indicator_style())
+        Span::styled("👤 Conectada", theme.playing_indicator_style())
     } else {
-        Span::styled("👤 Modo Público [c: Entrar]", theme.accent_style())
+        Span::styled("👤 Modo Público [c]", theme.accent_style())
     };
 
     let status_line = Line::from(vec![
@@ -138,7 +242,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(" | ● Daemon: ", theme.muted_style()),
         Span::styled("Ativo", theme.playing_indicator_style()),
         Span::styled(" | MPRIS2: ", theme.muted_style()),
-        Span::styled("Conectado", theme.accent_style()),
+        Span::styled("OK", theme.accent_style()),
         Span::styled(" | ?: Ajuda", theme.muted_style()),
     ]);
 
@@ -169,18 +273,20 @@ fn render_help_modal(f: &mut Frame, area: Rect, app: &App) {
         .style(theme.default_block_style());
 
     let shortcuts = [
-        ("Navegação:", ""),
-        ("  h, j, k, l / Setas", "Navegar entre painéis e rolar faixas"),
-        ("  1 / 2 / /", "Focar Biblioteca [1], Faixas [2] ou Busca [/]"),
-        ("  Enter", "Reproduzir faixa ou carregar item selecionado"),
-        ("  Esc", "Sair do modo de busca / fechar este modal"),
+        ("Navegação & Busca:", ""),
+        ("  h, j, k, l / Setas", "Navegar entre painéis e rolar listas"),
+        ("  1 / 2 / /", "Focar Biblioteca [1], Painel Principal [2] ou Busca [/]"),
+        ("  Tab / Shift+Tab", "Alternar filtro de busca (Músicas / Álbuns / Artistas)"),
+        ("  Enter", "Reproduzir faixa ou abrir álbum / artista"),
+        ("  Backspace / Esc", "Voltar à lista anterior / Sair da busca"),
         ("", ""),
         ("Controles de Reprodução:", ""),
         ("  Space", "Alternar Reproduzir / Pausar (Play / Pause)"),
-        ("  n / p", "Próxima faixa / Faixa anterior"),
+        ("  p", "Tocar álbum/artista completo de uma vez (ou faixa anterior)"),
+        ("  n / p (< / >)", "Próxima faixa / Faixa anterior"),
         ("  + / -", "Aumentar / Diminuir volume (±5%)"),
         ("  f", "Favoritar música atual (Like)"),
-        ("  a", "Adicionar faixa selecionada à fila de reprodução"),
+        ("  a", "Adicionar item selecionado (faixa/álbum/artista) à fila"),
         ("  r", "Iniciar Rádio Infinita a partir da faixa selecionada"),
         ("", ""),
         ("Controles de Janela & Sistema:", ""),
