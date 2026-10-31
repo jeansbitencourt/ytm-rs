@@ -320,6 +320,32 @@ pub fn parse_duration_to_secs(text: &str) -> u32 {
     }
 }
 
+pub fn is_view_count(s: &str) -> bool {
+    let lower = s.trim().to_lowercase();
+    lower.contains("visualiza")
+        || lower.contains("views")
+        || lower.ends_with("view")
+        || lower.contains("reproduç")
+        || lower.contains("reproduc")
+        || lower.contains("ouvintes")
+        || lower.contains("listeners")
+        || lower.contains("assistir")
+        || lower.contains("plays")
+}
+
+pub fn is_duration_str(s: &str) -> bool {
+    let trimmed = s.trim();
+    trimmed.contains(':') && trimmed.chars().all(|c| c.is_ascii_digit() || c == ':')
+}
+
+pub fn is_category_label(s: &str) -> bool {
+    let lower = s.trim().to_lowercase();
+    matches!(
+        lower.as_str(),
+        "música" | "musica" | "vídeo" | "video" | "canção" | "faixa" | "song" | "track" | "single" | "ep"
+    )
+}
+
 pub fn parse_search_results(val: &Value) -> Vec<Track> {
     let mut tracks = Vec::new();
     // Search can return contents in tabs or itemSectionRenderers
@@ -371,37 +397,38 @@ pub fn parse_music_responsive_item(renderer: &Value) -> Option<Track> {
     let mut album = "".to_string();
     let mut duration_secs = 0;
 
-    if flex_columns.len() == 2 {
-        if let Some(subtitle_runs) = flex_columns[1].pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs").and_then(|r| r.as_array()) {
-            let texts: Vec<&str> = subtitle_runs.iter().filter_map(|r| r.get("text").and_then(|t| t.as_str())).filter(|t| *t != " • ").collect();
-            if !texts.is_empty() {
-                artist = texts[0].to_string();
-            }
-            if texts.len() > 1 {
-                album = texts[1].to_string();
-            }
-            if let Some(last) = texts.last() {
-                duration_secs = parse_duration_to_secs(last);
-            }
-        }
-    } else if flex_columns.len() > 2 {
-        for col in &flex_columns[1..] {
-            if let Some(runs) = col.pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs").and_then(|r| r.as_array()) {
-                for r in runs {
-                    let text = r.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
-                    if text == "•" || text.is_empty() {
-                        continue;
-                    }
-                    let page_type = r.pointer("/navigationEndpoint/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType")
-                        .and_then(|p| p.as_str());
+    for col in &flex_columns[1..] {
+        if let Some(runs) = col.pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs").and_then(|r| r.as_array()) {
+            for r in runs {
+                let text = r.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
+                if text.is_empty() || text == "•" {
+                    continue;
+                }
+                let page_type = r.pointer("/navigationEndpoint/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType")
+                    .and_then(|p| p.as_str());
 
-                    if page_type == Some("MUSIC_PAGE_TYPE_ARTIST") && (artist == "Artista Desconhecido" || artist.is_empty()) {
-                        artist = text.to_string();
-                    } else if page_type == Some("MUSIC_PAGE_TYPE_ALBUM") {
-                        album = text.to_string();
-                    } else if artist == "Artista Desconhecido" && !text.starts_with("Tocou ") && !text.chars().any(|c| c.is_ascii_digit()) {
-                        artist = text.to_string();
+                if page_type == Some("MUSIC_PAGE_TYPE_ALBUM") {
+                    album = text.to_string();
+                    continue;
+                }
+                if page_type == Some("MUSIC_PAGE_TYPE_ARTIST") {
+                    artist = text.to_string();
+                    continue;
+                }
+                if is_duration_str(text) {
+                    let d = parse_duration_to_secs(text);
+                    if d > 0 {
+                        duration_secs = d;
                     }
+                    continue;
+                }
+                if is_view_count(text) || is_category_label(text) {
+                    continue;
+                }
+                if artist == "Artista Desconhecido" || artist.is_empty() {
+                    artist = text.to_string();
+                } else if album.is_empty() && !text.chars().all(|c| c.is_ascii_digit()) {
+                    album = text.to_string();
                 }
             }
         }
@@ -411,7 +438,10 @@ pub fn parse_music_responsive_item(renderer: &Value) -> Option<Track> {
     if duration_secs == 0 {
         if let Some(fixed_cols) = renderer.get("fixedColumns").and_then(|f| f.as_array()) {
             for col in fixed_cols {
-                if let Some(dur_text) = col.pointer("/musicResponsiveListItemFixedColumnRenderer/text/runs/0/text").and_then(|t| t.as_str()) {
+                if let Some(dur_text) = col.pointer("/musicResponsiveListItemFixedColumnRenderer/text/runs/0/text")
+                    .or_else(|| col.pointer("/musicResponsiveListItemFixedColumnRenderer/text/simpleText"))
+                    .and_then(|t| t.as_str())
+                {
                     let d = parse_duration_to_secs(dur_text);
                     if d > 0 {
                         duration_secs = d;
@@ -462,17 +492,46 @@ pub fn parse_playlist_panel_video(renderer: &Value) -> Option<Track> {
     let mut duration_secs = 0;
 
     if let Some(runs) = renderer.pointer("/longBylineText/runs").or_else(|| renderer.pointer("/shortBylineText/runs")).and_then(|r| r.as_array()) {
-        let texts: Vec<&str> = runs.iter().filter_map(|r| r.get("text").and_then(|t| t.as_str())).filter(|t| *t != " • ").collect();
-        if !texts.is_empty() {
-            artist = texts[0].to_string();
-        }
-        if texts.len() > 1 {
-            album = texts[1].to_string();
+        for r in runs {
+            let text = r.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
+            if text.is_empty() || text == "•" {
+                continue;
+            }
+            let page_type = r.pointer("/navigationEndpoint/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType")
+                .and_then(|p| p.as_str());
+
+            if page_type == Some("MUSIC_PAGE_TYPE_ALBUM") {
+                album = text.to_string();
+                continue;
+            }
+            if page_type == Some("MUSIC_PAGE_TYPE_ARTIST") {
+                artist = text.to_string();
+                continue;
+            }
+            if is_duration_str(text) {
+                if duration_secs == 0 {
+                    duration_secs = parse_duration_to_secs(text);
+                }
+                continue;
+            }
+            if is_view_count(text) || is_category_label(text) {
+                continue;
+            }
+            if artist == "Artista Desconhecido" || artist.is_empty() {
+                artist = text.to_string();
+            } else if album.is_empty() && !text.chars().all(|c| c.is_ascii_digit()) {
+                album = text.to_string();
+            }
         }
     }
 
-    if let Some(dur_text) = renderer.pointer("/lengthText/runs/0/text").and_then(|t| t.as_str()) {
-        duration_secs = parse_duration_to_secs(dur_text);
+    if duration_secs == 0 {
+        if let Some(dur_text) = renderer.pointer("/lengthText/runs/0/text")
+            .or_else(|| renderer.pointer("/lengthText/simpleText"))
+            .and_then(|t| t.as_str())
+        {
+            duration_secs = parse_duration_to_secs(dur_text);
+        }
     }
 
     let thumbnail_url = renderer
@@ -874,5 +933,125 @@ mod tests {
         assert_eq!(artist.name, "Daft Punk");
         assert_eq!(artist.subscribers_text, "68,3 mi ouvintes mensais");
         assert_eq!(artist.thumbnail_url, "https://lh3.googleusercontent.com/artist.jpg");
+    }
+
+    #[test]
+    fn test_is_view_count() {
+        assert!(is_view_count("17 mi de visualização"));
+        assert!(is_view_count("326 mil visualizações"));
+        assert!(is_view_count("1.2M views"));
+        assert!(is_view_count("500 views"));
+        assert!(is_view_count("100 ouvintes"));
+        assert!(is_view_count("15 mi de reproduções"));
+        assert!(!is_view_count("Somewhere in Time"));
+        assert!(!is_view_count("Rebirth"));
+        assert!(!is_view_count("Iron Maiden"));
+    }
+
+    #[test]
+    fn test_parse_playlist_panel_video_ignores_view_count_as_album() {
+        let raw = json!({
+            "videoId": "vid_xyz_123",
+            "title": {
+                "runs": [
+                    { "text": "Stranger in a Strange Land" }
+                ]
+            },
+            "longBylineText": {
+                "runs": [
+                    {
+                        "text": "Iron Maiden",
+                        "navigationEndpoint": {
+                            "browseEndpoint": {
+                                "browseEndpointContextSupportedConfigs": {
+                                    "browseEndpointContextMusicConfig": {
+                                        "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    { "text": " • " },
+                    { "text": "15 mi de visualização" }
+                ]
+            },
+            "lengthText": {
+                "runs": [
+                    { "text": "05:47" }
+                ]
+            },
+            "thumbnail": {
+                "thumbnails": [
+                    { "url": "https://lh3.googleusercontent.com/track.jpg" }
+                ]
+            }
+        });
+
+        let track = parse_playlist_panel_video(&raw).unwrap();
+        assert_eq!(track.video_id, "vid_xyz_123");
+        assert_eq!(track.title, "Stranger in a Strange Land");
+        assert_eq!(track.artist, "Iron Maiden");
+        assert_eq!(track.album, ""); // Should NOT be "15 mi de visualização"
+        assert_eq!(track.duration_secs, 347);
+        assert_eq!(track.duration_text, "05:47");
+    }
+
+    #[test]
+    fn test_parse_playlist_panel_video_with_real_album_and_views() {
+        let raw = json!({
+            "videoId": "vid_xyz_123",
+            "title": {
+                "runs": [
+                    { "text": "Stranger in a Strange Land" }
+                ]
+            },
+            "longBylineText": {
+                "runs": [
+                    {
+                        "text": "Iron Maiden",
+                        "navigationEndpoint": {
+                            "browseEndpoint": {
+                                "browseEndpointContextSupportedConfigs": {
+                                    "browseEndpointContextMusicConfig": {
+                                        "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    { "text": " • " },
+                    {
+                        "text": "Somewhere in Time",
+                        "navigationEndpoint": {
+                            "browseEndpoint": {
+                                "browseEndpointContextSupportedConfigs": {
+                                    "browseEndpointContextMusicConfig": {
+                                        "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    { "text": " • " },
+                    { "text": "15 mi de visualização" }
+                ]
+            },
+            "lengthText": {
+                "runs": [
+                    { "text": "05:47" }
+                ]
+            },
+            "thumbnail": {
+                "thumbnails": [
+                    { "url": "https://lh3.googleusercontent.com/track.jpg" }
+                ]
+            }
+        });
+
+        let track = parse_playlist_panel_video(&raw).unwrap();
+        assert_eq!(track.title, "Stranger in a Strange Land");
+        assert_eq!(track.artist, "Iron Maiden");
+        assert_eq!(track.album, "Somewhere in Time");
+        assert_eq!(track.duration_secs, 347);
     }
 }

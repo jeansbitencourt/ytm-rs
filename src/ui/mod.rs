@@ -76,6 +76,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     let is_tracklist_focused = app.active_panel == ActivePanel::Tracklist;
     let current_vid = app.player_state.current_track.as_ref().map(|t| t.video_id.as_str());
     let is_playing = app.player_state.status == crate::audio::PlaybackStatus::Playing;
+    app.tracklist_area = content_chunks[1];
 
     match app.content_view {
         ContentView::Tracks => {
@@ -89,6 +90,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 is_playing,
                 &mut app.tracklist_state,
                 is_tracklist_focused,
+                &mut app.thumb_protocols,
             );
         }
         ContentView::Albums => {
@@ -100,6 +102,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 &app.search_results_albums,
                 &mut app.album_table_state,
                 is_tracklist_focused,
+                &mut app.thumb_protocols,
             );
         }
         ContentView::Artists => {
@@ -111,6 +114,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 &app.search_results_artists,
                 &mut app.artist_table_state,
                 is_tracklist_focused,
+                &mut app.thumb_protocols,
             );
         }
     }

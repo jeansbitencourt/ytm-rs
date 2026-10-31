@@ -51,6 +51,18 @@ fn test_theme_omarchy_colors() {
     assert_eq!(theme.theme_name, "Tokyo Night (Default)");
 }
 
+#[tokio::test]
+async fn test_live_track_search_and_radio() {
+    let client = InnertubeClient::new(AuthConfig::default());
+    let tracks = client.search("Stranger in a Strange Land").await.unwrap();
+    assert!(!tracks.is_empty(), "Should find tracks");
+    for t in tracks.iter().take(3) {
+        println!("Search Track: '{}' by '{}', album: '{}', dur_secs: {}, dur_text: '{}'", t.title, t.artist, t.album, t.duration_secs, t.duration_text);
+        assert!(t.duration_secs > 0, "Duration must be greater than 0");
+        assert_ne!(t.duration_text, "00:00", "Duration must not be 00:00");
+    }
+}
+
 #[test]
 fn test_database_lifecycle() {
     let db = Database::open_in_memory().expect("Should open in-memory db");

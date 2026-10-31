@@ -4,7 +4,7 @@
 
 **YTM-RS** é um cliente de terminal (TUI) ultrarrápido e daemon de áudio para o **YouTube Music**, construído em **Rust + Ratatui + Tokio** e integrado profundamente ao ecossistema desktop **Omarchy** (Hyprland + Omarchy Shell / Quickshell).
 
-Inspirado na arquitetura do lendário `spotify-tui`, o `ytm-rs` consome menos de **18 MB de RAM**, funciona **imediatamente sem login** (com suporte a autenticação opcional para biblioteca e likes), e permite controle global contínuo pela barra superior (**Top Bar**) mesmo quando a janela principal está fechada.
+O `ytm-rs` consome menos de **18 MB de RAM**, funciona **imediatamente sem login** (com suporte a autenticação opcional para biblioteca e likes), e permite controle global contínuo pela barra superior (**Top Bar**) mesmo quando a janela principal está fechada.
 
 ---
 

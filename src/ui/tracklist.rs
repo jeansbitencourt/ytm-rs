@@ -1,11 +1,28 @@
-use ratatui::layout::{Constraint, Rect};
+use std::collections::{HashMap, HashSet};
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table, TableState};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
+use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::StatefulImage;
 
 use crate::innertube::{AlbumSummary, ArtistSummary, Track};
 use crate::theme::Theme;
+
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        s.to_string()
+    } else if max_chars > 1 {
+        let truncated: String = chars[..max_chars - 1].iter().collect();
+        format!("{}…", truncated)
+    } else if max_chars == 1 {
+        chars[0].to_string()
+    } else {
+        String::new()
+    }
+}
 
 pub fn render_tracklist(
     f: &mut Frame,
@@ -15,8 +32,9 @@ pub fn render_tracklist(
     tracks: &[Track],
     current_video_id: Option<&str>,
     is_playing: bool,
-    state: &mut TableState,
+    state: &mut ListState,
     is_focused: bool,
+    thumb_protocols: &mut HashMap<String, Box<dyn StatefulProtocol>>,
 ) {
     let border_style = if is_focused {
         theme.focused_border_style()
@@ -36,64 +54,175 @@ pub fn render_tracklist(
         .title(title)
         .style(theme.default_block_style());
 
-    let header_cells = ["#", "TÍTULO", "ARTISTA", "ÁLBUM", "DURAÇÃO"]
+    let inner_area = block.inner(area);
+
+    if inner_area.width < 15 || inner_area.height < 4 {
+        f.render_widget(block, area);
+        return;
+    }
+
+    if tracks.is_empty() {
+        let empty_msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled("Nenhuma música na lista.", theme.muted_style())),
+        ])
+        .alignment(Alignment::Center)
+        .block(block);
+        f.render_widget(empty_msg, area);
+        return;
+    }
+
+    let inner_w = inner_area.width as usize;
+
+    // Build 4-line cards for each track (with balanced top and bottom padding)
+    let items: Vec<ListItem> = tracks
         .iter()
-        .map(|h| Cell::from(*h).style(theme.muted_style().add_modifier(Modifier::BOLD)));
-    let header = Row::new(header_cells).height(1).bottom_margin(1);
+        .enumerate()
+        .map(|(i, track)| {
+            let is_current = current_video_id == Some(&track.video_id);
+            let is_selected = state.selected() == Some(i);
+            let has_thumb = thumb_protocols.contains_key(&track.video_id);
 
-    let rows = tracks.iter().enumerate().map(|(i, track)| {
-        let is_current = current_video_id == Some(&track.video_id);
-        let num_str = if is_current {
-            if is_playing {
-                format!("▶ {:02}", i + 1)
+            let (num_str, num_style) = if is_current {
+                if is_playing {
+                    (format!("▶ {:02} ", i + 1), theme.playing_indicator_style())
+                } else {
+                    (format!("⏸ {:02} ", i + 1), theme.accent_style())
+                }
+            } else if is_selected {
+                (format!("▸ {:02} ", i + 1), theme.accent_style())
             } else {
-                format!("⏸ {:02}", i + 1)
-            }
-        } else {
-            format!("  {:02}", i + 1)
-        };
+                (format!("  {:02} ", i + 1), theme.muted_style())
+            };
 
-        let num_style = if is_current {
-            theme.playing_indicator_style()
-        } else {
-            theme.muted_style()
-        };
+            let title_style = if is_current {
+                theme.playing_indicator_style()
+            } else {
+                theme.text_style().add_modifier(Modifier::BOLD)
+            };
 
-        let title_style = if is_current {
-            theme.playing_indicator_style()
-        } else {
-            theme.text_style()
-        };
+            let like_span = if track.is_liked {
+                Span::styled(" ♥", theme.liked_style())
+            } else {
+                Span::raw("")
+            };
+            let like_w = if track.is_liked { 2 } else { 0 };
 
-        let like_icon = if track.is_liked { " ♥" } else { "" };
-        let title_with_like = format!("{}{}", track.title, like_icon);
+            let dur_str = format!(" {} ", track.duration_text);
+            let dur_len = dur_str.chars().count();
+            let dur_span = Span::styled(dur_str, theme.muted_style());
 
-        let cells = vec![
-            Cell::from(num_str).style(num_style),
-            Cell::from(title_with_like).style(title_style),
-            Cell::from(track.artist.clone()).style(theme.text_style()),
-            Cell::from(track.album.clone()).style(theme.muted_style()),
-            Cell::from(track.duration_text.clone()).style(theme.muted_style()),
-        ];
+            // Left layout: 1 space + 4 chars thumb + 1 space + 5 chars number = 11 chars
+            let left_w = 11;
+            let right_w = dur_len;
+            let available_for_title = inner_w.saturating_sub(left_w + right_w + like_w);
 
-        Row::new(cells).height(1)
-    });
+            let disp_title = truncate_str(&track.title, available_for_title);
+            let title_chars = disp_title.chars().count();
+            let pad_title_w = available_for_title.saturating_sub(title_chars);
+            let pad_title = " ".repeat(pad_title_w);
 
-    let widths = [
-        Constraint::Length(5),
-        Constraint::Percentage(40),
-        Constraint::Percentage(25),
-        Constraint::Percentage(20),
-        Constraint::Length(8),
-    ];
+            let thumb_span_top = if has_thumb {
+                Span::raw("      ")
+            } else {
+                Span::styled(" [♫ ] ", theme.muted_style())
+            };
 
-    let table = Table::new(rows, widths)
-        .header(header)
+            // Line 0: Top padding line
+            let line0 = Line::from(vec![
+                Span::raw(" ".repeat(inner_w)),
+            ]);
+
+            // Line 1: Track title & duration
+            let line1 = Line::from(vec![
+                thumb_span_top,
+                Span::styled(num_str, num_style),
+                Span::styled(disp_title, title_style),
+                like_span,
+                Span::raw(pad_title),
+                dur_span,
+            ]);
+
+            // Line 2: Artist • Album
+            let subtitle = if !track.album.is_empty() && track.album != track.artist {
+                format!("{} • {}", track.artist, track.album)
+            } else {
+                track.artist.clone()
+            };
+
+            let avail_sub_w = inner_w.saturating_sub(left_w + 1);
+            let disp_sub = truncate_str(&subtitle, avail_sub_w);
+            let sub_chars = disp_sub.chars().count();
+            let pad_sub = " ".repeat(avail_sub_w.saturating_sub(sub_chars));
+
+            let sub_style = if is_selected {
+                theme.text_style()
+            } else {
+                theme.muted_style()
+            };
+
+            let thumb_span_bottom = if has_thumb {
+                Span::raw("      ")
+            } else {
+                Span::styled(" [  ] ", theme.muted_style())
+            };
+
+            let line2 = Line::from(vec![
+                thumb_span_bottom,
+                Span::raw("     "),
+                Span::styled(disp_sub, sub_style),
+                Span::raw(pad_sub),
+                Span::raw(" "),
+            ]);
+
+            // Line 3: Bottom padding line
+            let line3 = Line::from(vec![
+                Span::raw(" ".repeat(inner_w)),
+            ]);
+
+            ListItem::new(vec![line0, line1, line2, line3])
+        })
+        .collect();
+
+    let list = List::new(items)
         .block(block)
         .highlight_style(theme.selected_row_style())
-        .highlight_symbol("▸ ");
+        .highlight_symbol("");
 
-    f.render_stateful_widget(table, area, state);
+    f.render_stateful_widget(list, area, state);
+
+    // Render thumbnail images on top of visible cards
+    let offset = state.offset();
+    let visible_card_count = (inner_area.height / 4) as usize;
+    let mut seen_ids = HashSet::new();
+
+    for i in 0..visible_card_count {
+        let idx = offset + i;
+        if idx >= tracks.len() {
+            break;
+        }
+        let card_y = inner_area.y + (i as u16 * 4);
+        // Safety guard: ensure thumbnail never touches or overflows the bottom border
+        if card_y + 4 > inner_area.bottom() {
+            break;
+        }
+
+        let track = &tracks[idx];
+        if !seen_ids.insert(&track.video_id) {
+            continue;
+        }
+
+        if let Some(protocol) = thumb_protocols.get_mut(&track.video_id) {
+            let thumb_rect = Rect {
+                x: inner_area.x + 1,
+                y: card_y + 1,
+                width: 4,
+                height: 2,
+            };
+            let image_widget = StatefulImage::new(None);
+            f.render_stateful_widget(image_widget, thumb_rect, protocol);
+        }
+    }
 }
 
 pub fn render_album_list(
@@ -102,8 +231,9 @@ pub fn render_album_list(
     theme: &Theme,
     title_text: &str,
     albums: &[AlbumSummary],
-    state: &mut TableState,
+    state: &mut ListState,
     is_focused: bool,
+    thumb_protocols: &mut HashMap<String, Box<dyn StatefulProtocol>>,
 ) {
     let border_style = if is_focused {
         theme.focused_border_style()
@@ -123,36 +253,157 @@ pub fn render_album_list(
         .title(title)
         .style(theme.default_block_style());
 
-    let header_cells = ["#", "ÁLBUM", "ARTISTA", "ANO"]
+    let inner_area = block.inner(area);
+
+    if inner_area.width < 15 || inner_area.height < 4 {
+        f.render_widget(block, area);
+        return;
+    }
+
+    if albums.is_empty() {
+        let empty_msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled("Nenhum álbum encontrado.", theme.muted_style())),
+        ])
+        .alignment(Alignment::Center)
+        .block(block);
+        f.render_widget(empty_msg, area);
+        return;
+    }
+
+    let inner_w = inner_area.width as usize;
+
+    let items: Vec<ListItem> = albums
         .iter()
-        .map(|h| Cell::from(*h).style(theme.muted_style().add_modifier(Modifier::BOLD)));
-    let header = Row::new(header_cells).height(1).bottom_margin(1);
+        .enumerate()
+        .map(|(i, album)| {
+            let is_selected = state.selected() == Some(i);
+            let has_thumb = thumb_protocols.contains_key(&album.browse_id);
 
-    let rows = albums.iter().enumerate().map(|(i, album)| {
-        let num_str = format!("  {:02}", i + 1);
-        let cells = vec![
-            Cell::from(num_str).style(theme.muted_style()),
-            Cell::from(album.title.clone()).style(theme.accent_style().add_modifier(Modifier::BOLD)),
-            Cell::from(album.artist.clone()).style(theme.text_style()),
-            Cell::from(album.year.clone()).style(theme.muted_style()),
-        ];
-        Row::new(cells).height(1)
-    });
+            let (num_str, num_style) = if is_selected {
+                (format!("▸ {:02} ", i + 1), theme.accent_style())
+            } else {
+                (format!("  {:02} ", i + 1), theme.muted_style())
+            };
 
-    let widths = [
-        Constraint::Length(5),
-        Constraint::Percentage(45),
-        Constraint::Percentage(35),
-        Constraint::Length(10),
-    ];
+            let title_style = theme.accent_style().add_modifier(Modifier::BOLD);
 
-    let table = Table::new(rows, widths)
-        .header(header)
+            let year_str = if !album.year.is_empty() {
+                format!(" {} ", album.year)
+            } else {
+                " Álbum ".to_string()
+            };
+            let year_len = year_str.chars().count();
+            let year_span = Span::styled(year_str, theme.muted_style());
+
+            let left_w = 11;
+            let right_w = year_len;
+            let available_for_title = inner_w.saturating_sub(left_w + right_w);
+
+            let disp_title = truncate_str(&album.title, available_for_title);
+            let title_chars = disp_title.chars().count();
+            let pad_title_w = available_for_title.saturating_sub(title_chars);
+            let pad_title = " ".repeat(pad_title_w);
+
+            let thumb_span_top = if has_thumb {
+                Span::raw("      ")
+            } else {
+                Span::styled(" [💿] ", theme.muted_style())
+            };
+
+            // Line 0: Top padding line
+            let line0 = Line::from(vec![
+                Span::raw(" ".repeat(inner_w)),
+            ]);
+
+            // Line 1: Album title & year
+            let line1 = Line::from(vec![
+                thumb_span_top,
+                Span::styled(num_str, num_style),
+                Span::styled(disp_title, title_style),
+                Span::raw(pad_title),
+                year_span,
+            ]);
+
+            // Line 2: Artist name
+            let subtitle = if !album.artist.is_empty() {
+                format!("{} • Álbum", album.artist)
+            } else {
+                "Álbum".to_string()
+            };
+
+            let avail_sub_w = inner_w.saturating_sub(left_w + 1);
+            let disp_sub = truncate_str(&subtitle, avail_sub_w);
+            let sub_chars = disp_sub.chars().count();
+            let pad_sub = " ".repeat(avail_sub_w.saturating_sub(sub_chars));
+
+            let sub_style = if is_selected {
+                theme.text_style()
+            } else {
+                theme.muted_style()
+            };
+
+            let thumb_span_bottom = if has_thumb {
+                Span::raw("      ")
+            } else {
+                Span::styled(" [  ] ", theme.muted_style())
+            };
+
+            let line2 = Line::from(vec![
+                thumb_span_bottom,
+                Span::raw("     "),
+                Span::styled(disp_sub, sub_style),
+                Span::raw(pad_sub),
+                Span::raw(" "),
+            ]);
+
+            // Line 3: Bottom padding line
+            let line3 = Line::from(vec![
+                Span::raw(" ".repeat(inner_w)),
+            ]);
+
+            ListItem::new(vec![line0, line1, line2, line3])
+        })
+        .collect();
+
+    let list = List::new(items)
         .block(block)
         .highlight_style(theme.selected_row_style())
-        .highlight_symbol("▸ ");
+        .highlight_symbol("");
 
-    f.render_stateful_widget(table, area, state);
+    f.render_stateful_widget(list, area, state);
+
+    // Render thumbnail images on top of visible cards
+    let offset = state.offset();
+    let visible_card_count = (inner_area.height / 4) as usize;
+    let mut seen_ids = HashSet::new();
+
+    for i in 0..visible_card_count {
+        let idx = offset + i;
+        if idx >= albums.len() {
+            break;
+        }
+        let card_y = inner_area.y + (i as u16 * 4);
+        if card_y + 4 > inner_area.bottom() {
+            break;
+        }
+
+        let album = &albums[idx];
+        if !seen_ids.insert(&album.browse_id) {
+            continue;
+        }
+
+        if let Some(protocol) = thumb_protocols.get_mut(&album.browse_id) {
+            let thumb_rect = Rect {
+                x: inner_area.x + 1,
+                y: card_y + 1,
+                width: 4,
+                height: 2,
+            };
+            let image_widget = StatefulImage::new(None);
+            f.render_stateful_widget(image_widget, thumb_rect, protocol);
+        }
+    }
 }
 
 pub fn render_artist_list(
@@ -161,8 +412,9 @@ pub fn render_artist_list(
     theme: &Theme,
     title_text: &str,
     artists: &[ArtistSummary],
-    state: &mut TableState,
+    state: &mut ListState,
     is_focused: bool,
+    thumb_protocols: &mut HashMap<String, Box<dyn StatefulProtocol>>,
 ) {
     let border_style = if is_focused {
         theme.focused_border_style()
@@ -182,32 +434,145 @@ pub fn render_artist_list(
         .title(title)
         .style(theme.default_block_style());
 
-    let header_cells = ["#", "ARTISTA", "OUVINTES / DETALHES"]
+    let inner_area = block.inner(area);
+
+    if inner_area.width < 15 || inner_area.height < 4 {
+        f.render_widget(block, area);
+        return;
+    }
+
+    if artists.is_empty() {
+        let empty_msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled("Nenhum artista encontrado.", theme.muted_style())),
+        ])
+        .alignment(Alignment::Center)
+        .block(block);
+        f.render_widget(empty_msg, area);
+        return;
+    }
+
+    let inner_w = inner_area.width as usize;
+
+    let items: Vec<ListItem> = artists
         .iter()
-        .map(|h| Cell::from(*h).style(theme.muted_style().add_modifier(Modifier::BOLD)));
-    let header = Row::new(header_cells).height(1).bottom_margin(1);
+        .enumerate()
+        .map(|(i, artist)| {
+            let is_selected = state.selected() == Some(i);
+            let has_thumb = thumb_protocols.contains_key(&artist.browse_id);
 
-    let rows = artists.iter().enumerate().map(|(i, artist)| {
-        let num_str = format!("  {:02}", i + 1);
-        let cells = vec![
-            Cell::from(num_str).style(theme.muted_style()),
-            Cell::from(artist.name.clone()).style(theme.accent_style().add_modifier(Modifier::BOLD)),
-            Cell::from(artist.subscribers_text.clone()).style(theme.text_style()),
-        ];
-        Row::new(cells).height(1)
-    });
+            let (num_str, num_style) = if is_selected {
+                (format!("▸ {:02} ", i + 1), theme.accent_style())
+            } else {
+                (format!("  {:02} ", i + 1), theme.muted_style())
+            };
 
-    let widths = [
-        Constraint::Length(5),
-        Constraint::Percentage(50),
-        Constraint::Percentage(45),
-    ];
+            let title_style = theme.accent_style().add_modifier(Modifier::BOLD);
 
-    let table = Table::new(rows, widths)
-        .header(header)
+            let left_w = 11;
+            let available_for_title = inner_w.saturating_sub(left_w + 1);
+
+            let disp_title = truncate_str(&artist.name, available_for_title);
+            let title_chars = disp_title.chars().count();
+            let pad_title_w = available_for_title.saturating_sub(title_chars);
+            let pad_title = " ".repeat(pad_title_w);
+
+            let thumb_span_top = if has_thumb {
+                Span::raw("      ")
+            } else {
+                Span::styled(" [🎤] ", theme.muted_style())
+            };
+
+            // Line 0: Top padding line
+            let line0 = Line::from(vec![
+                Span::raw(" ".repeat(inner_w)),
+            ]);
+
+            // Line 1: Artist name
+            let line1 = Line::from(vec![
+                thumb_span_top,
+                Span::styled(num_str, num_style),
+                Span::styled(disp_title, title_style),
+                Span::raw(pad_title),
+            ]);
+
+            // Line 2: Subscribers / Details
+            let subtitle = if !artist.subscribers_text.is_empty() {
+                artist.subscribers_text.clone()
+            } else {
+                "Artista".to_string()
+            };
+
+            let avail_sub_w = inner_w.saturating_sub(left_w + 1);
+            let disp_sub = truncate_str(&subtitle, avail_sub_w);
+            let sub_chars = disp_sub.chars().count();
+            let pad_sub = " ".repeat(avail_sub_w.saturating_sub(sub_chars));
+
+            let sub_style = if is_selected {
+                theme.text_style()
+            } else {
+                theme.muted_style()
+            };
+
+            let thumb_span_bottom = if has_thumb {
+                Span::raw("      ")
+            } else {
+                Span::styled(" [  ] ", theme.muted_style())
+            };
+
+            let line2 = Line::from(vec![
+                thumb_span_bottom,
+                Span::raw("     "),
+                Span::styled(disp_sub, sub_style),
+                Span::raw(pad_sub),
+                Span::raw(" "),
+            ]);
+
+            // Line 3: Bottom padding line
+            let line3 = Line::from(vec![
+                Span::raw(" ".repeat(inner_w)),
+            ]);
+
+            ListItem::new(vec![line0, line1, line2, line3])
+        })
+        .collect();
+
+    let list = List::new(items)
         .block(block)
         .highlight_style(theme.selected_row_style())
-        .highlight_symbol("▸ ");
+        .highlight_symbol("");
 
-    f.render_stateful_widget(table, area, state);
+    f.render_stateful_widget(list, area, state);
+
+    // Render thumbnail images on top of visible cards
+    let offset = state.offset();
+    let visible_card_count = (inner_area.height / 4) as usize;
+    let mut seen_ids = HashSet::new();
+
+    for i in 0..visible_card_count {
+        let idx = offset + i;
+        if idx >= artists.len() {
+            break;
+        }
+        let card_y = inner_area.y + (i as u16 * 4);
+        if card_y + 4 > inner_area.bottom() {
+            break;
+        }
+
+        let artist = &artists[idx];
+        if !seen_ids.insert(&artist.browse_id) {
+            continue;
+        }
+
+        if let Some(protocol) = thumb_protocols.get_mut(&artist.browse_id) {
+            let thumb_rect = Rect {
+                x: inner_area.x + 1,
+                y: card_y + 1,
+                width: 4,
+                height: 2,
+            };
+            let image_widget = StatefulImage::new(None);
+            f.render_stateful_widget(image_widget, thumb_rect, protocol);
+        }
+    }
 }

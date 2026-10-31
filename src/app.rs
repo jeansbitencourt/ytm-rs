@@ -1,8 +1,9 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
-use ratatui::widgets::{ListState, TableState};
+use ratatui::widgets::ListState;
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -40,9 +41,9 @@ pub struct App {
     pub content_view: ContentView,
     pub search_filter: SearchFilter,
     pub sidebar_state: ListState,
-    pub tracklist_state: TableState,
-    pub album_table_state: TableState,
-    pub artist_table_state: TableState,
+    pub tracklist_state: ListState,
+    pub album_table_state: ListState,
+    pub artist_table_state: ListState,
     pub active_sidebar_item: SidebarItem,
     pub active_category_title: String,
     pub displayed_tracks: Vec<Track>,
@@ -62,6 +63,7 @@ pub struct App {
     pub should_quit: bool,
     pub playerbar_area: Rect,
     pub header_search_area: Rect,
+    pub tracklist_area: Rect,
     pub client: InnertubeClient,
     pub auth: crate::innertube::auth::AuthConfig,
     pub db: Arc<Mutex<Database>>,
@@ -70,6 +72,10 @@ pub struct App {
     pub cover_video_id: Option<String>,
     pub cover_tx: UnboundedSender<(String, image::DynamicImage)>,
     pub cover_rx: UnboundedReceiver<(String, image::DynamicImage)>,
+    pub thumb_protocols: HashMap<String, Box<dyn StatefulProtocol>>,
+    pub thumb_loading: HashSet<String>,
+    pub thumb_tx: UnboundedSender<(String, image::DynamicImage)>,
+    pub thumb_rx: UnboundedReceiver<(String, image::DynamicImage)>,
 }
 
 impl App {
@@ -84,13 +90,13 @@ impl App {
         let mut sidebar_state = ListState::default();
         sidebar_state.select(Some(0));
 
-        let mut tracklist_state = TableState::default();
+        let mut tracklist_state = ListState::default();
         tracklist_state.select(Some(0));
 
-        let mut album_table_state = TableState::default();
+        let mut album_table_state = ListState::default();
         album_table_state.select(Some(0));
 
-        let mut artist_table_state = TableState::default();
+        let mut artist_table_state = ListState::default();
         artist_table_state.select(Some(0));
 
         let (liked, history) = {
@@ -140,6 +146,7 @@ impl App {
         picker.guess_protocol();
 
         let (cover_tx, cover_rx) = unbounded_channel();
+        let (thumb_tx, thumb_rx) = unbounded_channel();
 
         Ok(Self {
             config,
@@ -170,6 +177,7 @@ impl App {
             should_quit: false,
             playerbar_area: Rect::default(),
             header_search_area: Rect::default(),
+            tracklist_area: Rect::default(),
             client,
             auth,
             db,
@@ -178,6 +186,10 @@ impl App {
             cover_video_id: None,
             cover_tx,
             cover_rx,
+            thumb_protocols: HashMap::new(),
+            thumb_loading: HashSet::new(),
+            thumb_tx,
+            thumb_rx,
         })
     }
 
@@ -229,6 +241,92 @@ impl App {
                     });
                 }
             }
+        }
+    }
+
+    pub fn update_thumbnails_if_needed(&mut self) {
+        // 1. Drain newly loaded thumbnails
+        while let Ok((id, img)) = self.thumb_rx.try_recv() {
+            self.thumb_loading.remove(&id);
+            let proto = self.picker.new_resize_protocol(img);
+            self.thumb_protocols.insert(id, proto);
+        }
+
+        // 2. Bound cache size
+        if self.thumb_protocols.len() > 180 {
+            self.thumb_protocols.clear();
+        }
+
+        // 3. Determine items to prefetch depending on content_view
+        let items_to_fetch: Vec<(String, String)> = match self.content_view {
+            ContentView::Tracks => {
+                let offset = self.tracklist_state.offset();
+                let start = offset.saturating_sub(1);
+                let end = (offset + 25).min(self.displayed_tracks.len());
+                self.displayed_tracks[start..end]
+                    .iter()
+                    .filter(|t| !t.thumbnail_url.is_empty())
+                    .map(|t| (t.video_id.clone(), t.thumbnail_url.clone()))
+                    .collect()
+            }
+            ContentView::Albums => {
+                let offset = self.album_table_state.offset();
+                let start = offset.saturating_sub(1);
+                let end = (offset + 25).min(self.search_results_albums.len());
+                self.search_results_albums[start..end]
+                    .iter()
+                    .filter(|a| !a.thumbnail_url.is_empty())
+                    .map(|a| (a.browse_id.clone(), a.thumbnail_url.clone()))
+                    .collect()
+            }
+            ContentView::Artists => {
+                let offset = self.artist_table_state.offset();
+                let start = offset.saturating_sub(1);
+                let end = (offset + 25).min(self.search_results_artists.len());
+                self.search_results_artists[start..end]
+                    .iter()
+                    .filter(|a| !a.thumbnail_url.is_empty())
+                    .map(|a| (a.browse_id.clone(), a.thumbnail_url.clone()))
+                    .collect()
+            }
+        };
+
+        for (id, url) in items_to_fetch {
+            if self.thumb_protocols.contains_key(&id) || self.thumb_loading.contains(&id) {
+                continue;
+            }
+
+            self.thumb_loading.insert(id.clone());
+            let tx = self.thumb_tx.clone();
+
+            tokio::spawn(async move {
+                let fetch_url = if url.contains("=w") && url.contains("-h") {
+                    let prefix = url.split("=w").next().unwrap_or(&url);
+                    format!("{}=w120-h120-l90-rj", prefix)
+                } else {
+                    url.clone()
+                };
+
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(6))
+                    .build()
+                    .unwrap_or_default();
+
+                let resp = match client.get(&fetch_url).send().await {
+                    Ok(r) if r.status().is_success() => Ok(r),
+                    _ => client.get(&url).send().await,
+                };
+
+                if let Ok(res) = resp {
+                    if let Ok(bytes) = res.bytes().await {
+                        if let Ok(img) = image::load_from_memory(&bytes) {
+                            // Downscale thumbnail to 80x80 to eliminate Sixel lag and flickering
+                            let small_img = img.thumbnail(80, 80);
+                            let _ = tx.send((id, small_img));
+                        }
+                    }
+                }
+            });
         }
     }
 
@@ -752,6 +850,111 @@ impl App {
                     self.active_panel = ActivePanel::Search;
                 }
                 return Ok(());
+            }
+
+            // Clicking on tracklist / album / artist card
+            if self.tracklist_area.width > 0
+                && mouse.column >= self.tracklist_area.left()
+                && mouse.column < self.tracklist_area.right()
+                && mouse.row > self.tracklist_area.top()
+                && mouse.row < self.tracklist_area.bottom()
+            {
+                self.active_panel = ActivePanel::Tracklist;
+                let rel_y = mouse.row.saturating_sub(self.tracklist_area.top() + 1);
+                let card_offset = (rel_y / 4) as usize;
+
+                match self.content_view {
+                    ContentView::Tracks => {
+                        if !self.displayed_tracks.is_empty() {
+                            let card_idx = self.tracklist_state.offset() + card_offset;
+                            if card_idx < self.displayed_tracks.len() {
+                                let was_selected = self.tracklist_state.selected() == Some(card_idx);
+                                self.tracklist_state.select(Some(card_idx));
+                                if was_selected {
+                                    let tracks = self.displayed_tracks.clone();
+                                    let _ = send_daemon_command(
+                                        &self.config,
+                                        DaemonCommand::QueueTracks(tracks, card_idx),
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                    }
+                    ContentView::Albums => {
+                        if !self.search_results_albums.is_empty() {
+                            let card_idx = self.album_table_state.offset() + card_offset;
+                            if card_idx < self.search_results_albums.len() {
+                                let was_selected = self.album_table_state.selected() == Some(card_idx);
+                                self.album_table_state.select(Some(card_idx));
+                                if was_selected {
+                                    self.open_selected_album(false).await;
+                                }
+                            }
+                        }
+                    }
+                    ContentView::Artists => {
+                        if !self.search_results_artists.is_empty() {
+                            let card_idx = self.artist_table_state.offset() + card_offset;
+                            if card_idx < self.search_results_artists.len() {
+                                let was_selected = self.artist_table_state.selected() == Some(card_idx);
+                                self.artist_table_state.select(Some(card_idx));
+                                if was_selected {
+                                    self.open_selected_artist(false).await;
+                                }
+                            }
+                        }
+                    }
+                }
+                return Ok(());
+            }
+        } else if mouse.kind == MouseEventKind::ScrollUp {
+            match self.content_view {
+                ContentView::Tracks => {
+                    let cur = self.tracklist_state.selected().unwrap_or(0);
+                    if cur > 0 {
+                        self.tracklist_state.select(Some(cur - 1));
+                    }
+                }
+                ContentView::Albums => {
+                    let cur = self.album_table_state.selected().unwrap_or(0);
+                    if cur > 0 {
+                        self.album_table_state.select(Some(cur - 1));
+                    }
+                }
+                ContentView::Artists => {
+                    let cur = self.artist_table_state.selected().unwrap_or(0);
+                    if cur > 0 {
+                        self.artist_table_state.select(Some(cur - 1));
+                    }
+                }
+            }
+        } else if mouse.kind == MouseEventKind::ScrollDown {
+            match self.content_view {
+                ContentView::Tracks => {
+                    if !self.displayed_tracks.is_empty() {
+                        let cur = self.tracklist_state.selected().unwrap_or(0);
+                        if cur + 1 < self.displayed_tracks.len() {
+                            self.tracklist_state.select(Some(cur + 1));
+                        }
+                    }
+                }
+                ContentView::Albums => {
+                    if !self.search_results_albums.is_empty() {
+                        let cur = self.album_table_state.selected().unwrap_or(0);
+                        if cur + 1 < self.search_results_albums.len() {
+                            self.album_table_state.select(Some(cur + 1));
+                        }
+                    }
+                }
+                ContentView::Artists => {
+                    if !self.search_results_artists.is_empty() {
+                        let cur = self.artist_table_state.selected().unwrap_or(0);
+                        if cur + 1 < self.search_results_artists.len() {
+                            self.artist_table_state.select(Some(cur + 1));
+                        }
+                    }
+                }
             }
         }
         Ok(())
