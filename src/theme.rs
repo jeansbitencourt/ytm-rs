@@ -6,6 +6,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawThemeColors {
+    pub name: Option<String>,
     pub mode: Option<String>,
     pub accent: Option<String>,
     pub background: Option<String>,
@@ -73,13 +74,18 @@ impl Theme {
     pub fn load_omarchy() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let candidate_paths = [
-            home.join(".local/state/omarchy/current/theme/colors.toml"),
-            home.join(".config/omarchy/current/theme/colors.toml"),
+            (home.join(".local/state/omarchy/current/theme/colors.toml"), "Omarchy Live Theme"),
+            (home.join(".config/omarchy/current/theme/colors.toml"), "Omarchy Config Theme"),
+            (home.join(".config/ytm-rs/theme.toml"), "Custom User Theme"),
+            (home.join(".config/ytm-rs/colors.toml"), "Custom User Theme"),
         ];
 
-        for path in &candidate_paths {
+        for (path, default_label) in &candidate_paths {
             if path.exists() {
-                if let Ok(theme) = Self::from_file(path) {
+                if let Ok(mut theme) = Self::from_file(path) {
+                    if theme.theme_name == "Omarchy Live Theme" {
+                        theme.theme_name = default_label.to_string();
+                    }
                     return theme;
                 }
             }
@@ -127,7 +133,11 @@ impl Theme {
             theme.magenta = c;
         }
 
-        theme.theme_name = "Omarchy Live Theme".to_string();
+        if let Some(name) = raw.name {
+            theme.theme_name = name;
+        } else {
+            theme.theme_name = "Omarchy Live Theme".to_string();
+        }
         Ok(theme)
     }
 
@@ -184,10 +194,16 @@ pub struct ThemeWatcher {
 impl ThemeWatcher {
     pub fn new() -> Option<Self> {
         let home = dirs::home_dir()?;
-        let target_dir = home.join(".local/state/omarchy/current");
-        if !target_dir.exists() {
+        let omarchy_dir = home.join(".local/state/omarchy/current");
+        let ytm_dir = home.join(".config/ytm-rs");
+
+        let target_dir = if omarchy_dir.exists() {
+            omarchy_dir
+        } else if ytm_dir.exists() {
+            ytm_dir
+        } else {
             return None;
-        }
+        };
 
         let (notify_tx, notify_rx) = channel();
         let (event_tx, event_rx) = channel();
@@ -234,5 +250,17 @@ mod tests {
     fn test_theme_fallback() {
         let theme = Theme::default();
         assert_eq!(theme.accent, Color::Rgb(122, 162, 247));
+    }
+
+    #[test]
+    fn test_custom_theme_from_str() {
+        let toml_data = r##"
+            name = "Nord Test"
+            accent = "#88c0d0"
+            background = "#2e3440"
+        "##;
+        let raw: RawThemeColors = toml::from_str(toml_data).unwrap();
+        assert_eq!(raw.name, Some("Nord Test".to_string()));
+        assert_eq!(parse_hex_color(raw.accent.unwrap().as_str()), Some(Color::Rgb(136, 192, 208)));
     }
 }

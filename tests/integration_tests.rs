@@ -51,6 +51,24 @@ fn test_theme_omarchy_colors() {
     assert_eq!(theme.theme_name, "Tokyo Night (Default)");
 }
 
+#[test]
+fn test_custom_theme_file_loading() {
+    let temp_dir = std::env::temp_dir().join("ytm_rs_test_theme");
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let theme_file = temp_dir.join("theme.toml");
+    let content = r##"
+name = "Catppuccin Mocha"
+accent = "#89b4fa"
+background = "#1e1e2e"
+foreground = "#cdd6f4"
+"##;
+    std::fs::write(&theme_file, content).unwrap();
+    let theme = Theme::from_file(&theme_file).unwrap();
+    assert_eq!(theme.theme_name, "Catppuccin Mocha");
+    assert_eq!(theme.accent, ratatui::style::Color::Rgb(137, 180, 250));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
 #[tokio::test]
 async fn test_live_track_search_and_radio() {
     let client = InnertubeClient::new(AuthConfig::default());
