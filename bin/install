@@ -9,7 +9,6 @@ echo "Installing ytm-rs to user desktop..."
 mkdir -p "$HOME/.local/bin"
 mkdir -p "$HOME/.local/share/applications"
 mkdir -p "$HOME/.local/share/icons/hicolor/scalable/apps"
-mkdir -p "$HOME/.config/omarchy/plugins/jeansbitencourt.ytm-rs"
 
 # Install binary
 install -m755 "$ROOT/build/ytm-rs" "$HOME/.local/bin/ytm-rs"
@@ -18,17 +17,19 @@ install -m755 "$ROOT/build/ytm-rs" "$HOME/.local/bin/ytm-rs"
 install -m644 "$ROOT/pkgbuild/ytm-rs.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/ytm-rs.svg"
 install -m644 "$ROOT/pkgbuild/ytm-rs.desktop" "$HOME/.local/share/applications/ytm-rs.desktop"
 
-# Install Omarchy Top Bar plugin
-cp -r "$ROOT/omarchy-plugin/jeansbitencourt.ytm-rs/"* "$HOME/.config/omarchy/plugins/jeansbitencourt.ytm-rs/"
+# Install Omarchy Top Bar plugin (if omarchy directory exists or omarchy-shell is installed)
+if [ -d "$HOME/.config/omarchy" ] || command -v omarchy-shell >/dev/null 2>&1; then
+    mkdir -p "$HOME/.config/omarchy/plugins/jeansbitencourt.ytm-rs"
+    cp -r "$ROOT/omarchy-plugin/jeansbitencourt.ytm-rs/"* "$HOME/.config/omarchy/plugins/jeansbitencourt.ytm-rs/"
+    if command -v omarchy-shell >/dev/null 2>&1; then
+        omarchy-shell shell rescanPlugins 2>/dev/null || true
+    fi
+    echo "Plugin: $HOME/.config/omarchy/plugins/jeansbitencourt.ytm-rs/"
+fi
 
 # Update desktop and icon databases
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
-
-# Rescan Omarchy shell plugins
-if command -v omarchy-shell >/dev/null 2>&1; then
-    omarchy-shell shell rescanPlugins 2>/dev/null || true
-fi
 
 echo "Successfully installed ytm-rs!"
 echo "Binary: $HOME/.local/bin/ytm-rs"

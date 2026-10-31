@@ -15,7 +15,8 @@ O `ytm-rs` consome menos de **18 MB de RAM**, funciona **imediatamente sem login
   - Servidor **MPRIS2 D-Bus** nativo (`org.mpris.MediaPlayer2.ytmrs`) integrado ao widget de áudio padrão do sistema.
   - Widget nativo para a Top Bar (`jeansbitencourt.ytm-rs`) com suporte a **Clique Esquerdo** (Play/Pause), **Clique do Meio** (Favoritar/Like), **Clique Direito** (Abrir/Esconder TUI no Scratchpad) e **Scroll** (Ajuste de Volume).
 - **Interface Ratatui Estilo spotify-tui**: Layout modular em 4 blocos (Busca, Biblioteca, Faixas e Player Bar) com bordas arredondadas e suporte a temas ao vivo do Omarchy.
-- **Sincronização de Tema Dinâmica**: Lê e monitora em tempo real as cores de `~/.local/state/omarchy/current/theme/colors.toml`. Ao trocar o tema com `omarchy theme set`, o visual do `ytm-rs` se adapta instantaneamente sem reiniciar.
+- **Sincronização de Tema Dinâmica**: Lê e monitora em tempo real as cores de `~/.local/state/omarchy/current/theme/colors.toml` no Omarchy. Fora do Omarchy, oferece suporte a temas customizados em `~/.config/ytm-rs/theme.toml` com fallback automático para Tokyo Night.
+- **Detecção Inteligente de Terminal**: Compatível com múltiplos emuladores de terminal (**Foot**, **Kitty**, **Ghostty**, **Alacritty**, **WezTerm**, ou `$TERMINAL`). Renderiza capas de álbuns via **Sixel**, **Kitty Graphics Protocol** ou **Halfblocks** Unicode.
 - **Transições Instantâneas (Prefetching)**: Worker assíncrono resolve a URL de áudio Opus 251 da próxima faixa assim que a música atual atinge 80%, garantindo troca instantânea (< 50ms).
 - **Rádio Dinâmica Infinita**: Pressione `r` em qualquer faixa para gerar uma fila de rádio infinita baseada no algoritmo do YouTube Music (`RDAMVM{videoId}`).
 - **Atalhos Orientados a Teclado (Vim-like)**.

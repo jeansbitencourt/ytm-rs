@@ -39,6 +39,8 @@ enum Commands {
         #[command(subcommand)]
         action: CtlAction,
     },
+    /// Foca na janela existente do YTM-RS ou abre uma nova no terminal apropriado
+    Launch,
     /// Gerencia autenticação no YouTube Music (cookies e conta)
     Auth {
         #[command(subcommand)]
@@ -94,6 +96,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Daemon) => run_daemon(config).await,
         Some(Commands::Ctl { action }) => run_ctl(config, action).await,
+        Some(Commands::Launch) => {
+            focus_or_launch_window();
+            Ok(())
+        }
         Some(Commands::Auth { action }) => run_auth(config, action).await,
         None => run_tui(config).await,
     }
@@ -107,55 +113,298 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
     daemon.run(mpv_events).await
 }
 
-async fn run_ctl(config: AppConfig, action: CtlAction) -> Result<()> {
-    match action {
-        CtlAction::Focus => {
-            // Check if a window with class ytm-rs already exists in Hyprland
-            let output = std::process::Command::new("hyprctl")
-                .args(["clients", "-j"])
-                .output();
-            let mut window_address = None;
-            let mut window_monitor = None;
-            if let Ok(out) = output {
-                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                    if let Some(arr) = val.as_array() {
-                        for client in arr {
-                            let class = client.get("class").and_then(|c| c.as_str()).unwrap_or("");
-                            let initial_class = client.get("initialClass").and_then(|c| c.as_str()).unwrap_or("");
-                            if class == "ytm-rs" || initial_class == "ytm-rs" {
-                                if let Some(addr) = client.get("address").and_then(|a| a.as_str()) {
-                                    window_address = Some(addr.to_string());
-                                }
-                                if let Some(mon) = client.get("monitor").and_then(|m| m.as_i64()) {
-                                    window_monitor = Some(mon);
-                                }
-                                break;
-                            }
+fn which(cmd: &str) -> bool {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join(cmd);
+            if candidate.is_file() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = candidate.metadata() {
+                        if meta.permissions().mode() & 0o111 != 0 {
+                            return true;
                         }
                     }
                 }
+                #[cfg(not(unix))]
+                return true;
             }
+        }
+    }
+    false
+}
 
-            if let Some(addr) = window_address {
-                let lua_cmd = if let Some(mon) = window_monitor {
-                    format!(
-                        "hl.dispatch(hl.dsp.focus({{ monitor = '{}' }})); hl.dispatch(hl.dsp.focus({{ window = 'address:{}' }}))",
-                        mon, addr
-                    )
-                } else {
-                    format!("hl.dispatch(hl.dsp.focus({{ window = 'address:{}' }}))", addr)
+struct TerminalInvocation {
+    cmd: String,
+    args: Vec<String>,
+}
+
+fn detect_terminal_launcher() -> TerminalInvocation {
+    // 1. Prioritize Foot (standard terminal in Omarchy).
+    // Uses --app-id=ytm-rs so Hyprland applies floating window rules (^ytm-rs$)
+    // and Sixel graphics for album art.
+    if which("foot") {
+        return TerminalInvocation {
+            cmd: "foot".to_string(),
+            args: vec![
+                "--app-id=ytm-rs".to_string(),
+                "--title=YTM-RS".to_string(),
+                "-e".to_string(),
+                "ytm-rs".to_string(),
+            ],
+        };
+    }
+
+    // 2. If Foot is not installed, check if user explicitly requested a terminal via YTM_TERMINAL or TERMINAL
+    let user_terminal = std::env::var("YTM_TERMINAL")
+        .ok()
+        .or_else(|| {
+            std::env::var("TERMINAL")
+                .ok()
+                .filter(|t| t.trim() != "xdg-terminal-exec" && !t.trim().is_empty())
+        });
+
+    if let Some(term) = user_terminal {
+        let term_trimmed = term.trim();
+        if which(term_trimmed) {
+            let lower = term_trimmed.to_lowercase();
+            if lower.contains("foot") {
+                return TerminalInvocation {
+                    cmd: term_trimmed.to_string(),
+                    args: vec![
+                        "--app-id=ytm-rs".to_string(),
+                        "--title=YTM-RS".to_string(),
+                        "-e".to_string(),
+                        "ytm-rs".to_string(),
+                    ],
                 };
-                let _ = std::process::Command::new("hyprctl")
-                    .args(["eval", &lua_cmd])
-                    .output();
+            } else if lower.contains("kitty") {
+                return TerminalInvocation {
+                    cmd: term_trimmed.to_string(),
+                    args: vec![
+                        "--class=ytm-rs".to_string(),
+                        "--title=YTM-RS".to_string(),
+                        "-e".to_string(),
+                        "ytm-rs".to_string(),
+                    ],
+                };
+            } else if lower.contains("ghostty") {
+                return TerminalInvocation {
+                    cmd: term_trimmed.to_string(),
+                    args: vec![
+                        "--class=ytm-rs".to_string(),
+                        "--title=YTM-RS".to_string(),
+                        "-e".to_string(),
+                        "ytm-rs".to_string(),
+                    ],
+                };
+            } else if lower.contains("alacritty") {
+                return TerminalInvocation {
+                    cmd: term_trimmed.to_string(),
+                    args: vec![
+                        "--class".to_string(),
+                        "ytm-rs,ytm-rs".to_string(),
+                        "--title".to_string(),
+                        "YTM-RS".to_string(),
+                        "-e".to_string(),
+                        "ytm-rs".to_string(),
+                    ],
+                };
+            } else if lower.contains("wezterm") {
+                return TerminalInvocation {
+                    cmd: term_trimmed.to_string(),
+                    args: vec![
+                        "start".to_string(),
+                        "--class".to_string(),
+                        "ytm-rs".to_string(),
+                        "ytm-rs".to_string(),
+                    ],
+                };
             } else {
-                let _ = std::process::Command::new("setsid")
-                    .args(["-f", "uwsm-app", "--", "foot", "--app-id=ytm-rs", "--title=YTM-RS", "-e", "ytm-rs"])
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status();
+                return TerminalInvocation {
+                    cmd: term_trimmed.to_string(),
+                    args: vec!["-e".to_string(), "ytm-rs".to_string()],
+                };
             }
+        }
+    }
+
+    // 3. Fallbacks for other popular terminals when outside Omarchy
+    if which("kitty") {
+        return TerminalInvocation {
+            cmd: "kitty".to_string(),
+            args: vec![
+                "--class=ytm-rs".to_string(),
+                "--title=YTM-RS".to_string(),
+                "-e".to_string(),
+                "ytm-rs".to_string(),
+            ],
+        };
+    }
+
+    if which("ghostty") {
+        return TerminalInvocation {
+            cmd: "ghostty".to_string(),
+            args: vec![
+                "--class=ytm-rs".to_string(),
+                "--title=YTM-RS".to_string(),
+                "-e".to_string(),
+                "ytm-rs".to_string(),
+            ],
+        };
+    }
+
+    if which("alacritty") {
+        return TerminalInvocation {
+            cmd: "alacritty".to_string(),
+            args: vec![
+                "--class".to_string(),
+                "ytm-rs,ytm-rs".to_string(),
+                "--title".to_string(),
+                "YTM-RS".to_string(),
+                "-e".to_string(),
+                "ytm-rs".to_string(),
+            ],
+        };
+    }
+
+    if which("wezterm") {
+        return TerminalInvocation {
+            cmd: "wezterm".to_string(),
+            args: vec![
+                "start".to_string(),
+                "--class".to_string(),
+                "ytm-rs".to_string(),
+                "ytm-rs".to_string(),
+            ],
+        };
+    }
+
+    if which("xdg-terminal-exec") {
+        return TerminalInvocation {
+            cmd: "xdg-terminal-exec".to_string(),
+            args: vec!["-e".to_string(), "ytm-rs".to_string()],
+        };
+    }
+
+    if which("x-terminal-emulator") {
+        return TerminalInvocation {
+            cmd: "x-terminal-emulator".to_string(),
+            args: vec!["-e".to_string(), "ytm-rs".to_string()],
+        };
+    }
+
+    // 4. Ultimate fallback
+    TerminalInvocation {
+        cmd: "xterm".to_string(),
+        args: vec![
+            "-title".to_string(),
+            "YTM-RS".to_string(),
+            "-e".to_string(),
+            "ytm-rs".to_string(),
+        ],
+    }
+}
+
+fn spawn_terminal_window() {
+    let term = detect_terminal_launcher();
+
+    let use_uwsm = which("uwsm-app");
+    let use_setsid = which("setsid");
+
+    if use_setsid {
+        let mut cmd = std::process::Command::new("setsid");
+        cmd.arg("-f");
+        if use_uwsm {
+            cmd.args(["uwsm-app", "--"]);
+        }
+        cmd.arg(&term.cmd);
+        cmd.args(&term.args);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let _ = cmd.status();
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let mut cmd = if use_uwsm {
+                let mut c = std::process::Command::new("uwsm-app");
+                c.arg("--").arg(&term.cmd);
+                c
+            } else {
+                std::process::Command::new(&term.cmd)
+            };
+            cmd.args(&term.args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0);
+            let _ = cmd.spawn();
+        }
+        #[cfg(not(unix))]
+        {
+            let mut cmd = std::process::Command::new(&term.cmd);
+            cmd.args(&term.args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            let _ = cmd.spawn();
+        }
+    }
+}
+
+fn focus_or_launch_window() {
+    // Check if a window with class ytm-rs already exists in Hyprland
+    let output = std::process::Command::new("hyprctl")
+        .args(["clients", "-j"])
+        .output();
+    let mut window_address = None;
+    let mut window_monitor = None;
+    if let Ok(out) = output {
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+            if let Some(arr) = val.as_array() {
+                for client in arr {
+                    let class = client.get("class").and_then(|c| c.as_str()).unwrap_or("");
+                    let initial_class = client.get("initialClass").and_then(|c| c.as_str()).unwrap_or("");
+                    let title = client.get("title").and_then(|c| c.as_str()).unwrap_or("");
+                    let initial_title = client.get("initialTitle").and_then(|c| c.as_str()).unwrap_or("");
+                    if class == "ytm-rs" || initial_class == "ytm-rs" || title == "YTM-RS" || initial_title == "YTM-RS" {
+                        if let Some(addr) = client.get("address").and_then(|a| a.as_str()) {
+                            window_address = Some(addr.to_string());
+                        }
+                        if let Some(mon) = client.get("monitor").and_then(|m| m.as_i64()) {
+                            window_monitor = Some(mon);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(addr) = window_address {
+        let lua_cmd = if let Some(mon) = window_monitor {
+            format!(
+                "hl.dispatch(hl.dsp.focus({{ monitor = '{}' }})); hl.dispatch(hl.dsp.focus({{ window = 'address:{}' }}))",
+                mon, addr
+            )
+        } else {
+            format!("hl.dispatch(hl.dsp.focus({{ window = 'address:{}' }}))", addr)
+        };
+        let _ = std::process::Command::new("hyprctl")
+            .args(["eval", &lua_cmd])
+            .output();
+    } else {
+        spawn_terminal_window();
+    }
+}
+
+async fn run_ctl(config: AppConfig, action: CtlAction) -> Result<()> {
+    match action {
+        CtlAction::Focus => {
+            focus_or_launch_window();
         }
         CtlAction::Toggle => {
             let _ = send_daemon_command(&config, DaemonCommand::Toggle).await?;

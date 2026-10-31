@@ -6,7 +6,7 @@ GenericName=YouTube Music Player
 GenericName[pt_BR]=Reprodutor do YouTube Music
 Comment=Fast terminal client and background daemon for YouTube Music
 Comment[pt_BR]=Cliente de terminal rápido e daemon em segundo plano para o YouTube Music
-Exec=foot --app-id=ytm-rs --title="YTM-RS" -e ytm-rs
+Exec=ytm-rs ctl focus
 Icon=ytm-rs
 Terminal=false
 Categories=AudioVideo;Audio;Player;Music;

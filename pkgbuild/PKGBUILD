@@ -5,7 +5,13 @@ pkgdesc='YouTube Music TUI and background daemon for Omarchy'
 arch=('x86_64' 'aarch64')
 url='https://github.com/jeansbitencourt/ytm-rs'
 license=('MIT')
-depends=('mpv' 'yt-dlp' 'foot' 'gcc-libs' 'alsa-lib' 'dbus')
+depends=('mpv' 'yt-dlp' 'gcc-libs' 'alsa-lib' 'dbus')
+optdepends=(
+  'foot: terminal padrão recomendado no Omarchy (suporte nativo a Sixel e regras de janela)'
+  'kitty: emulador de terminal com suporte ao Kitty Graphics Protocol'
+  'ghostty: emulador de terminal moderno com aceleração por GPU'
+  'alacritty: emulador de terminal rápido (renderização de capas via halfblocks)'
+)
 makedepends=('cargo')
 source=()
 sha256sums=()
