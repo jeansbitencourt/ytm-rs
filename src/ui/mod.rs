@@ -71,6 +71,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         theme,
         &mut app.cover_protocol,
         app.player_state.current_track.is_some(),
+        app.picker.font_size,
     );
 
     let is_tracklist_focused = app.active_panel == ActivePanel::Tracklist;
@@ -133,12 +134,57 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     }
 }
 
+pub fn compute_cover_art_rect(inner_area: Rect, font_size: (u16, u16)) -> Option<Rect> {
+    if inner_area.width < 4 || inner_area.height < 2 {
+        return None;
+    }
+
+    let (font_w, font_h) = (font_size.0.max(1), font_size.1.max(1));
+    let cell_ratio = font_h as f32 / font_w as f32;
+
+    // Safety margin: keep at least 1 column padding on each side and 1 row on top and bottom
+    // to strictly prevent the image from touching or overdrawing the rounded border or tracklist.
+    let avail_w = inner_area.width.saturating_sub(2);
+    let avail_h = inner_area.height.saturating_sub(2);
+
+    if avail_w < 2 || avail_h < 2 {
+        return None;
+    }
+
+    // A square image in pixels has width_px == height_px.
+    // Therefore, target_w (cells) * font_w == target_h (cells) * font_h
+    // => target_w == target_h * (font_h / font_w) == target_h * cell_ratio.
+    let target_w_from_h = ((avail_h as f32) * cell_ratio).round() as u16;
+
+    let (target_w, target_h) = if target_w_from_h <= avail_w {
+        (target_w_from_h, avail_h)
+    } else {
+        let target_h_from_w = ((avail_w as f32) / cell_ratio).round() as u16;
+        (avail_w, target_h_from_w.min(avail_h))
+    };
+
+    let target_w = target_w.max(1).min(avail_w);
+    let target_h = target_h.max(1).min(avail_h);
+
+    // Center target_rect inside inner_area
+    let offset_x = (inner_area.width.saturating_sub(target_w)) / 2;
+    let offset_y = (inner_area.height.saturating_sub(target_h)) / 2;
+
+    Some(Rect {
+        x: inner_area.x + offset_x,
+        y: inner_area.y + offset_y,
+        width: target_w,
+        height: target_h,
+    })
+}
+
 fn render_cover_art(
     f: &mut Frame,
     area: Rect,
     theme: &crate::theme::Theme,
     cover_protocol: &mut Option<Box<dyn ratatui_image::protocol::StatefulProtocol>>,
     is_playing: bool,
+    font_size: (u16, u16),
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -148,6 +194,7 @@ fn render_cover_art(
         .style(theme.default_block_style());
 
     let inner_area = block.inner(area);
+    f.render_widget(Clear, area);
     f.render_widget(block, area);
 
     if inner_area.width < 4 || inner_area.height < 2 {
@@ -155,8 +202,10 @@ fn render_cover_art(
     }
 
     if let Some(protocol) = cover_protocol {
-        let image_widget = StatefulImage::new(None);
-        f.render_stateful_widget(image_widget, inner_area, protocol);
+        if let Some(target_rect) = compute_cover_art_rect(inner_area, font_size) {
+            let image_widget = StatefulImage::new(None);
+            f.render_stateful_widget(image_widget, target_rect, protocol);
+        }
     } else {
         let placeholder = if is_playing {
             vec![
@@ -481,6 +530,58 @@ mod tests {
 
         // Beyond artists button
         assert_eq!(get_search_filter_button_at(70, 0, search_area), None);
+    }
+
+    #[test]
+    fn test_compute_cover_art_rect_bounds_and_margins() {
+        let inner_area = Rect::new(10, 10, 42, 28);
+        let font_size = (7, 16);
+
+        let target = compute_cover_art_rect(inner_area, font_size).expect("should compute rect");
+
+        // Must stay strictly within inner_area
+        assert!(target.left() >= inner_area.left());
+        assert!(target.top() >= inner_area.top());
+        assert!(target.right() <= inner_area.right());
+        assert!(target.bottom() <= inner_area.bottom());
+
+        // Must have at least 1 cell margin on each side to avoid border touching
+        assert!(target.left() > inner_area.left());
+        assert!(target.right() < inner_area.right());
+        assert!(target.top() > inner_area.top());
+        assert!(target.bottom() < inner_area.bottom());
+
+        // Square aspect ratio check in pixels
+        let w_px = target.width as f32 * font_size.0 as f32;
+        let h_px = target.height as f32 * font_size.1 as f32;
+        let ratio = w_px / h_px;
+        assert!((ratio - 1.0).abs() < 0.15, "image should be approximately square in pixels: {}", ratio);
+    }
+
+    #[test]
+    fn test_compute_cover_art_rect_various_dimensions() {
+        let font_sizes = [(7, 16), (8, 16), (9, 18), (10, 20)];
+        let test_areas = [
+            Rect::new(0, 0, 80, 20), // Wide
+            Rect::new(5, 5, 20, 40), // Tall
+            Rect::new(1, 1, 30, 30), // Square
+            Rect::new(0, 0, 44, 30), // Realistic ytm-rs sidebar
+        ];
+
+        for &font_size in &font_sizes {
+            for &area in &test_areas {
+                let target = compute_cover_art_rect(area, font_size).unwrap();
+                assert!(target.left() >= area.left());
+                assert!(target.top() >= area.top());
+                assert!(target.right() <= area.right());
+                assert!(target.bottom() <= area.bottom());
+                assert!(target.right() < area.right() + 1);
+            }
+        }
+
+        // Tiny areas should return None gracefully
+        assert_eq!(compute_cover_art_rect(Rect::new(0, 0, 3, 3), (7, 16)), None);
+        assert_eq!(compute_cover_art_rect(Rect::new(0, 0, 10, 2), (7, 16)), None);
     }
 }
 

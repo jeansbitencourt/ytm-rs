@@ -70,6 +70,7 @@ pub struct App {
     pub picker: Picker,
     pub cover_protocol: Option<Box<dyn StatefulProtocol>>,
     pub cover_video_id: Option<String>,
+    pub current_cover_image: Option<(String, image::DynamicImage)>,
     pub cover_tx: UnboundedSender<(String, image::DynamicImage)>,
     pub cover_rx: UnboundedReceiver<(String, image::DynamicImage)>,
     pub thumb_protocols: HashMap<String, Box<dyn StatefulProtocol>>,
@@ -139,10 +140,15 @@ impl App {
         sidebar_state.select(Some(sidebar_idx));
         tracklist_state.select(Some(track_idx));
 
+        let font_size = detect_terminal_font_size();
         let mut picker = match Picker::from_termios() {
-            Ok(p) => p,
-            Err(_) => Picker::new((8, 16)),
+            Ok(mut p) => {
+                p.font_size = font_size;
+                p
+            }
+            Err(_) => Picker::new(font_size),
         };
+        picker.font_size = font_size;
         picker.guess_protocol();
 
         let (cover_tx, cover_rx) = unbounded_channel();
@@ -184,6 +190,7 @@ impl App {
             picker,
             cover_protocol: None,
             cover_video_id: None,
+            current_cover_image: None,
             cover_tx,
             cover_rx,
             thumb_protocols: HashMap::new(),
@@ -194,8 +201,19 @@ impl App {
     }
 
     pub fn update_cover_if_needed(&mut self) {
+        // Dynamically track terminal font/cell dimensions
+        let new_font_size = detect_terminal_font_size();
+        if new_font_size != self.picker.font_size {
+            self.picker.font_size = new_font_size;
+            if let Some((_, img)) = &self.current_cover_image {
+                self.cover_protocol = Some(self.picker.new_resize_protocol(img.clone()));
+            }
+            self.thumb_protocols.clear();
+        }
+
         while let Ok((vid, img)) = self.cover_rx.try_recv() {
             if self.player_state.current_track.as_ref().map(|t| &t.video_id) == Some(&vid) {
+                self.current_cover_image = Some((vid.clone(), img.clone()));
                 self.cover_protocol = Some(self.picker.new_resize_protocol(img));
             }
         }
@@ -206,6 +224,7 @@ impl App {
         if current_vid != self.cover_video_id.as_deref() {
             self.cover_video_id = current_vid.map(|s| s.to_string());
             self.cover_protocol = None;
+            self.current_cover_image = None;
 
             if let Some(track) = current_track {
                 if !track.thumbnail_url.is_empty() {
@@ -1085,4 +1104,43 @@ impl App {
             }
         }
     }
+}
+
+pub fn detect_terminal_font_size() -> (u16, u16) {
+    #[cfg(unix)]
+    {
+        use rustix::termios::tcgetwinsize;
+
+        let fds = [
+            rustix::stdio::stdout(),
+            rustix::stdio::stdin(),
+            rustix::stdio::stderr(),
+        ];
+        for fd in fds {
+            if let Ok(ws) = tcgetwinsize(fd) {
+                if ws.ws_xpixel > 0 && ws.ws_ypixel > 0 && ws.ws_col > 0 && ws.ws_row > 0 {
+                    let fx = ws.ws_xpixel / ws.ws_col;
+                    let fy = ws.ws_ypixel / ws.ws_row;
+                    if fx > 0 && fy > 0 {
+                        return (fx, fy);
+                    }
+                }
+            }
+        }
+
+        if let Ok(tty) = std::fs::File::open("/dev/tty") {
+            use std::os::fd::AsFd;
+            if let Ok(ws) = tcgetwinsize(tty.as_fd()) {
+                if ws.ws_xpixel > 0 && ws.ws_ypixel > 0 && ws.ws_col > 0 && ws.ws_row > 0 {
+                    let fx = ws.ws_xpixel / ws.ws_col;
+                    let fy = ws.ws_ypixel / ws.ws_row;
+                    if fx > 0 && fy > 0 {
+                        return (fx, fy);
+                    }
+                }
+            }
+        }
+    }
+
+    (7, 16)
 }

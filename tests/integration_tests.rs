@@ -142,3 +142,10 @@ async fn test_daemon_protocol_roundtrip() {
     server_task.await.unwrap();
     let _ = std::fs::remove_file(&sock_path);
 }
+
+#[test]
+fn test_detect_font_size() {
+    let font_size = ytm_rs::app::detect_terminal_font_size();
+    println!("Detected font size: {:?}", font_size);
+    assert!(font_size.0 > 0 && font_size.1 > 0);
+}
