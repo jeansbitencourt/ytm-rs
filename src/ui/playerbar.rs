@@ -1,5 +1,5 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, LineGauge, Paragraph};
 use ratatui::Frame;
@@ -56,6 +56,177 @@ pub fn get_player_button_at(col: u16, row: u16, playerbar_area: Rect) -> Option<
     }
 }
 
+const BLOCKS: [char; 9] = [' ', ' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+pub fn compute_visualizer_levels(status: PlaybackStatus, position_secs: f64) -> [u8; 6] {
+    match status {
+        PlaybackStatus::Playing => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+            let t = now * 3.2 + (position_secs * 0.1).sin() * 0.3;
+
+            // Band 0: Sub-bass (~60 Hz kick/sub)
+            let k0 = (t * 1.8).sin().max(0.0).powi(3);
+            let s0 = (t * 0.9).cos() * 0.5 + 0.5;
+            let e0 = 0.65 * k0 + 0.35 * s0;
+
+            // Band 1: Bass (~150 Hz rhythm bass)
+            let k1 = (t * 1.8 + 0.4).sin().max(0.0).powi(2);
+            let s1 = (t * 2.7).sin() * 0.5 + 0.5;
+            let e1 = 0.5 * k1 + 0.5 * s1;
+
+            // Band 2: Low-mid (~400 Hz chords & body)
+            let e2 = ((t * 2.2).cos() * 0.5 + 0.5) * 0.7 + ((t * 4.1).sin() * 0.3 + 0.3);
+
+            // Band 3: Mid (~1 kHz melody & vocal core)
+            let e3 = ((t * 3.1 + 1.0).sin() * 0.5 + 0.5) * 0.6 + ((t * 5.7).cos() * 0.4 + 0.4);
+
+            // Band 4: High-mid (~3 kHz snare & presence)
+            let k4 = (t * 3.6).sin().powi(4);
+            let s4 = (t * 7.3).sin() * 0.5 + 0.5;
+            let e4 = 0.4 * k4 + 0.6 * s4;
+
+            // Band 5: Treble (~8 kHz hi-hat & shimmer)
+            let e5 = (t * 7.2).sin().abs() * 0.5 + (t * 13.5).cos().abs() * 0.5;
+
+            let energies = [e0, e1, e2, e3, e4, e5];
+            let mut out = [0u8; 6];
+            for (idx, &e) in energies.iter().enumerate() {
+                let scaled = (e.clamp(0.05, 1.0) * 16.0).round() as u8;
+                out[idx] = scaled.clamp(1, 16);
+            }
+            out
+        }
+        PlaybackStatus::Paused => [2, 3, 3, 3, 2, 1],
+        PlaybackStatus::Buffering => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+            let phase = ((now * 5.0) as usize) % 6;
+            let mut out = [2u8; 6];
+            out[phase] = 12;
+            if phase > 0 {
+                out[phase - 1] = 7;
+            }
+            if phase + 1 < 6 {
+                out[phase + 1] = 7;
+            }
+            out
+        }
+        PlaybackStatus::Stopped => [0, 0, 0, 0, 0, 0],
+    }
+}
+
+fn render_audio_visualizer(
+    f: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    player: &PlayerState,
+) {
+    if area.width < 6 || area.height < 2 {
+        return;
+    }
+
+    let levels = compute_visualizer_levels(player.status, player.position_secs);
+
+    // Row 0: Status badge / Title
+    let row0 = match player.status {
+        PlaybackStatus::Playing => {
+            Line::from(vec![
+                Span::styled(" ♫ ", theme.title_style()),
+                Span::styled("LIVE ", theme.accent_style().add_modifier(Modifier::BOLD)),
+            ])
+        }
+        PlaybackStatus::Paused => {
+            Line::from(Span::styled(" ⏸ PAUS ", theme.muted_style()))
+        }
+        PlaybackStatus::Buffering => {
+            Line::from(Span::styled(" ⏳ BUFF ", theme.accent_style()))
+        }
+        PlaybackStatus::Stopped => {
+            Line::from(Span::styled(" ■ IDLE ", theme.muted_style()))
+        }
+    };
+
+    // If area only has height 2:
+    if area.height == 2 {
+        let mut spans = vec![Span::raw(" ")];
+        for &lvl in &levels {
+            let single_lvl = ((lvl + 1) / 2).min(8) as usize;
+            let ch = BLOCKS[single_lvl];
+            let style = match player.status {
+                PlaybackStatus::Playing => {
+                    if single_lvl >= 7 {
+                        theme.liked_style()
+                    } else if single_lvl >= 5 {
+                        Style::default().fg(theme.yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        theme.playing_indicator_style()
+                    }
+                }
+                _ => theme.muted_style(),
+            };
+            spans.push(Span::styled(ch.to_string(), style));
+        }
+        spans.push(Span::raw(" "));
+        let p = Paragraph::new(vec![row0, Line::from(spans)]);
+        f.render_widget(p, area);
+        return;
+    }
+
+    // Row 1 (Upper peaks) & Row 2 (Lower base):
+    let mut upper_spans = vec![Span::raw(" ")];
+    let mut lower_spans = vec![Span::raw(" ")];
+
+    for &lvl in &levels {
+        let (up_ch, up_style, low_ch, low_style) = if lvl == 0 {
+            (' ', theme.muted_style(), ' ', theme.muted_style())
+        } else if lvl <= 8 {
+            let low_ch = BLOCKS[lvl as usize];
+            let low_style = if player.status == PlaybackStatus::Playing {
+                theme.playing_indicator_style()
+            } else {
+                theme.muted_style()
+            };
+            (' ', theme.muted_style(), low_ch, low_style)
+        } else {
+            let up_ch = BLOCKS[(lvl - 8) as usize];
+            let up_style = if player.status == PlaybackStatus::Playing {
+                if lvl >= 14 {
+                    theme.liked_style()
+                } else if lvl >= 11 {
+                    Style::default().fg(theme.yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    theme.accent_style()
+                }
+            } else {
+                theme.muted_style()
+            };
+            let low_style = if player.status == PlaybackStatus::Playing {
+                theme.playing_indicator_style()
+            } else {
+                theme.muted_style()
+            };
+            (up_ch, up_style, BLOCKS[8], low_style)
+        };
+
+        upper_spans.push(Span::styled(up_ch.to_string(), up_style));
+        lower_spans.push(Span::styled(low_ch.to_string(), low_style));
+    }
+    upper_spans.push(Span::raw(" "));
+    lower_spans.push(Span::raw(" "));
+
+    let p = Paragraph::new(vec![
+        row0,
+        Line::from(upper_spans),
+        Line::from(lower_spans),
+    ]);
+    f.render_widget(p, area);
+}
+
 pub fn render_playerbar(
     f: &mut Frame,
     area: Rect,
@@ -81,13 +252,8 @@ pub fn render_playerbar(
         .constraints([Constraint::Length(8), Constraint::Min(20)])
         .split(inner);
 
-    // Left: Music Note Icon / Thumbnail representation
-    let icon_lines = vec![
-        Line::from(Span::styled("  ♫ ", theme.title_style())),
-        Line::from(Span::styled(" [YTM]", theme.muted_style())),
-    ];
-    let icon_p = Paragraph::new(icon_lines).alignment(Alignment::Center);
-    f.render_widget(icon_p, chunks[0]);
+    // Left: Animated Bar Visualizer
+    render_audio_visualizer(f, chunks[0], theme, player);
 
     // Right: 3 rows:
     // Row 0: Title — Artist [Codec tag]
@@ -219,5 +385,26 @@ mod tests {
         assert_eq!(get_player_button_at(110, 12, area), Some(PlayerButton::Help));
         // Wrong row
         assert_eq!(get_player_button_at(88, 11, area), None);
+    }
+
+    #[test]
+    fn test_compute_visualizer_levels() {
+        // Stopped returns all 0
+        let stopped = compute_visualizer_levels(PlaybackStatus::Stopped, 0.0);
+        assert_eq!(stopped, [0, 0, 0, 0, 0, 0]);
+
+        // Paused returns steady baseline
+        let paused = compute_visualizer_levels(PlaybackStatus::Paused, 10.0);
+        assert_eq!(paused, [2, 3, 3, 3, 2, 1]);
+
+        // Playing returns non-zero values within 1..=16
+        let playing = compute_visualizer_levels(PlaybackStatus::Playing, 25.5);
+        for &lvl in &playing {
+            assert!(lvl >= 1 && lvl <= 16, "level should be in 1..=16, got {}", lvl);
+        }
+
+        // Buffering returns wave with peak
+        let buffering = compute_visualizer_levels(PlaybackStatus::Buffering, 0.0);
+        assert!(buffering.iter().any(|&l| l >= 10));
     }
 }
