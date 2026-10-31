@@ -8,6 +8,7 @@ pub use super::parsers::*;
 use super::{AlbumSummary, ArtistSummary, PlaylistSummary, SearchFilter, Track, UserProfile};
 
 const INNERTUBE_BASE_URL: &str = "https://music.youtube.com/youtubei/v1";
+const YOUTUBE_BASE_URL: &str = "https://www.youtube.com/youtubei/v1";
 const WEB_REMIX_ORIGIN: &str = "https://music.youtube.com";
 const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
 
@@ -37,7 +38,17 @@ impl InnertubeClient {
         })
     }
 
-    fn build_headers(&self) -> HeaderMap {
+    fn tv_context() -> Value {
+        json!({
+            "client": {
+                "clientName": "TVHTML5",
+                "clientVersion": "7.20230405.08.01",
+                "theme": "CLASSIC"
+            }
+        })
+    }
+
+    fn build_web_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(ORIGIN, HeaderValue::from_static(WEB_REMIX_ORIGIN));
@@ -52,12 +63,22 @@ impl InnertubeClient {
             }
         }
 
-        if let Some(token) = &self.auth.oauth_token {
-            if let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", token)) {
+        if let Some(auth_hdr) = self.auth.get_sapisid_auth_header(WEB_REMIX_ORIGIN) {
+            if let Ok(val) = HeaderValue::from_str(&auth_hdr) {
                 headers.insert(AUTHORIZATION, val);
             }
-        } else if let Some(auth_hdr) = self.auth.get_sapisid_auth_header(WEB_REMIX_ORIGIN) {
-            if let Ok(val) = HeaderValue::from_str(&auth_hdr) {
+        }
+
+        headers
+    }
+
+    fn build_tv_headers(&self) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(USER_AGENT, HeaderValue::from_static(DEFAULT_USER_AGENT));
+
+        if let Some(token) = &self.auth.oauth_token {
+            if let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", token)) {
                 headers.insert(AUTHORIZATION, val);
             }
         }
@@ -99,7 +120,7 @@ impl InnertubeClient {
             "params": "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"
         });
 
-        let headers = self.build_headers();
+        let headers = self.build_web_headers();
         let resp = self.http.post(&url)
             .headers(headers)
             .json(&payload)
@@ -115,7 +136,7 @@ impl InnertubeClient {
                 "context": Self::default_context(),
                 "query": query,
             });
-            let headers = self.build_headers();
+            let headers = self.build_web_headers();
             if let Ok(r) = self.http.post(&url).headers(headers).json(&payload_fallback).send().await {
                 if let Ok(b) = r.json::<Value>().await {
                     return Ok(parse_search_results(&b));
@@ -135,7 +156,7 @@ impl InnertubeClient {
             "isAudioOnly": true
         });
 
-        let headers = self.build_headers();
+        let headers = self.build_web_headers();
         let resp = self.http.post(&url)
             .headers(headers)
             .json(&payload)
@@ -148,13 +169,26 @@ impl InnertubeClient {
     }
 
     pub async fn get_liked_music(&self) -> Result<Vec<Track>> {
-        let url = format!("{}/browse", INNERTUBE_BASE_URL);
-        let payload = json!({
-            "context": Self::default_context(),
-            "browseId": "FEmusic_liked_videos"
-        });
+        let (url, payload, headers) = if self.auth.has_oauth() {
+            (
+                format!("{}/browse", YOUTUBE_BASE_URL),
+                json!({
+                    "context": Self::tv_context(),
+                    "browseId": "FEmusic_liked_videos"
+                }),
+                self.build_tv_headers(),
+            )
+        } else {
+            (
+                format!("{}/browse", INNERTUBE_BASE_URL),
+                json!({
+                    "context": Self::default_context(),
+                    "browseId": "FEmusic_liked_videos"
+                }),
+                self.build_web_headers(),
+            )
+        };
 
-        let headers = self.build_headers();
         let resp = self.http.post(&url)
             .headers(headers)
             .json(&payload)
@@ -168,15 +202,30 @@ impl InnertubeClient {
 
     pub async fn like_track(&self, video_id: &str, like: bool) -> Result<()> {
         let endpoint = if like { "like/like" } else { "like/removelike" };
-        let url = format!("{}/{}", INNERTUBE_BASE_URL, endpoint);
-        let payload = json!({
-            "context": Self::default_context(),
-            "target": {
-                "videoId": video_id
-            }
-        });
+        let (url, payload, headers) = if self.auth.has_oauth() {
+            (
+                format!("{}/{}", YOUTUBE_BASE_URL, endpoint),
+                json!({
+                    "context": Self::tv_context(),
+                    "target": {
+                        "videoId": video_id
+                    }
+                }),
+                self.build_tv_headers(),
+            )
+        } else {
+            (
+                format!("{}/{}", INNERTUBE_BASE_URL, endpoint),
+                json!({
+                    "context": Self::default_context(),
+                    "target": {
+                        "videoId": video_id
+                    }
+                }),
+                self.build_web_headers(),
+            )
+        };
 
-        let headers = self.build_headers();
         let resp = self.http.post(&url)
             .headers(headers)
             .json(&payload)
@@ -198,7 +247,7 @@ impl InnertubeClient {
             "params": SearchFilter::Albums.params()
         });
 
-        let headers = self.build_headers();
+        let headers = self.build_web_headers();
         let resp = self.http.post(&url)
             .headers(headers)
             .json(&payload)
@@ -218,7 +267,7 @@ impl InnertubeClient {
             "params": SearchFilter::Artists.params()
         });
 
-        let headers = self.build_headers();
+        let headers = self.build_web_headers();
         let resp = self.http.post(&url)
             .headers(headers)
             .json(&payload)
@@ -237,7 +286,7 @@ impl InnertubeClient {
             "browseId": browse_id
         });
 
-        let headers = self.build_headers();
+        let headers = self.build_web_headers();
         let resp = self.http.post(&url)
             .headers(headers)
             .json(&payload)
@@ -256,7 +305,7 @@ impl InnertubeClient {
             "browseId": browse_id
         });
 
-        let headers = self.build_headers();
+        let headers = self.build_web_headers();
         let resp = self.http.post(&url)
             .headers(headers.clone())
             .json(&payload)
@@ -329,32 +378,63 @@ impl InnertubeClient {
 
     /// Fetches the authenticated user's profile (name, handle, avatar URL)
     pub async fn get_user_profile(&self) -> Result<Option<UserProfile>> {
-        let url = format!("{}/account/account_menu", INNERTUBE_BASE_URL);
-        let payload = json!({
-            "context": Self::default_context()
-        });
+        if self.auth.has_oauth() {
+            let url = format!("{}/guide", YOUTUBE_BASE_URL);
+            let payload = json!({
+                "context": Self::tv_context()
+            });
 
-        let headers = self.build_headers();
-        let resp = self.http.post(&url)
-            .headers(headers)
-            .json(&payload)
-            .send()
-            .await
-            .context("Failed to send account_menu request to Innertube")?;
+            let headers = self.build_tv_headers();
+            let resp = self.http.post(&url)
+                .headers(headers)
+                .json(&payload)
+                .send()
+                .await
+                .context("Failed to send guide request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse account_menu response JSON")?;
-        Ok(parse_user_profile(&body))
+            let body: Value = resp.json().await.context("Failed to parse guide response JSON")?;
+            Ok(parse_user_profile(&body))
+        } else {
+            let url = format!("{}/account/account_menu", INNERTUBE_BASE_URL);
+            let payload = json!({
+                "context": Self::default_context()
+            });
+
+            let headers = self.build_web_headers();
+            let resp = self.http.post(&url)
+                .headers(headers)
+                .json(&payload)
+                .send()
+                .await
+                .context("Failed to send account_menu request to Innertube")?;
+
+            let body: Value = resp.json().await.context("Failed to parse account_menu response JSON")?;
+            Ok(parse_user_profile(&body))
+        }
     }
 
     /// Fetches the authenticated user's playlists from their library
     pub async fn get_user_playlists(&self) -> Result<Vec<PlaylistSummary>> {
-        let url = format!("{}/browse", INNERTUBE_BASE_URL);
-        let payload = json!({
-            "context": Self::default_context(),
-            "browseId": "FEmusic_liked_playlists"
-        });
+        let (url, payload, headers) = if self.auth.has_oauth() {
+            (
+                format!("{}/browse", YOUTUBE_BASE_URL),
+                json!({
+                    "context": Self::tv_context(),
+                    "browseId": "FEmusic_liked_playlists"
+                }),
+                self.build_tv_headers(),
+            )
+        } else {
+            (
+                format!("{}/browse", INNERTUBE_BASE_URL),
+                json!({
+                    "context": Self::default_context(),
+                    "browseId": "FEmusic_liked_playlists"
+                }),
+                self.build_web_headers(),
+            )
+        };
 
-        let headers = self.build_headers();
         let resp = self.http.post(&url)
             .headers(headers.clone())
             .json(&payload)
@@ -364,8 +444,8 @@ impl InnertubeClient {
 
         let body: Value = resp.json().await.context("Failed to parse library playlists response JSON")?;
         let mut list = parse_library_playlists(&body);
-        if list.is_empty() {
-            // Fallback to FEmusic_library_landing
+        if list.is_empty() && !self.auth.has_oauth() {
+            // Fallback to FEmusic_library_landing for Web mode
             let payload_fallback = json!({
                 "context": Self::default_context(),
                 "browseId": "FEmusic_library_landing"
@@ -387,13 +467,26 @@ impl InnertubeClient {
             format!("VL{}", browse_id)
         };
 
-        let url = format!("{}/browse", INNERTUBE_BASE_URL);
-        let payload = json!({
-            "context": Self::default_context(),
-            "browseId": clean_id
-        });
+        let (url, payload, headers) = if self.auth.has_oauth() {
+            (
+                format!("{}/browse", YOUTUBE_BASE_URL),
+                json!({
+                    "context": Self::tv_context(),
+                    "browseId": clean_id
+                }),
+                self.build_tv_headers(),
+            )
+        } else {
+            (
+                format!("{}/browse", INNERTUBE_BASE_URL),
+                json!({
+                    "context": Self::default_context(),
+                    "browseId": clean_id
+                }),
+                self.build_web_headers(),
+            )
+        };
 
-        let headers = self.build_headers();
         let resp = self.http.post(&url)
             .headers(headers)
             .json(&payload)
@@ -404,7 +497,9 @@ impl InnertubeClient {
         let body: Value = resp.json().await.context("Failed to parse playlist browse response JSON")?;
 
         let title = body
-            .pointer("/header/musicResponsiveHeaderRenderer/title/runs/0/text")
+            .pointer("/contents/tvBrowseRenderer/content/tvSurfaceContentRenderer/content/twoColumnRenderer/leftColumn/entityMetadataRenderer/title/simpleText")
+            .or_else(|| body.pointer("/contents/tvBrowseRenderer/content/tvSurfaceContentRenderer/content/twoColumnRenderer/leftColumn/entityMetadataRenderer/title/runs/0/text"))
+            .or_else(|| body.pointer("/header/musicResponsiveHeaderRenderer/title/runs/0/text"))
             .or_else(|| body.pointer("/header/musicDetailHeaderRenderer/title/runs/0/text"))
             .or_else(|| body.pointer("/header/musicEditablePlaylistDetailHeaderRenderer/header/musicDetailHeaderRenderer/title/runs/0/text"))
             .and_then(|t| t.as_str())

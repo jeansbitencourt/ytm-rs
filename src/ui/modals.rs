@@ -104,10 +104,20 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
     // 1. Status Info
     let status_line = if app.auth.is_authenticated() {
         if let Some(prof) = &app.user_profile {
+            let handle_disp = if !prof.handle.is_empty() {
+                format!("── {} ({})", prof.name, prof.handle)
+            } else {
+                format!("── {}", prof.name)
+            };
+            let auth_type = if app.auth.has_oauth() {
+                "✓ Conectado via Google OAuth "
+            } else {
+                "✓ Conectado ao YouTube Music "
+            };
             Line::from(vec![
                 Span::styled("Status da Conta: ", theme.title_style()),
-                Span::styled("✓ Conectado ao YouTube Music ", theme.playing_indicator_style().add_modifier(Modifier::BOLD)),
-                Span::styled(format!("── {} ({})", prof.name, prof.handle), theme.text_style()),
+                Span::styled(auth_type, theme.playing_indicator_style().add_modifier(Modifier::BOLD)),
+                Span::styled(handle_disp, theme.text_style()),
             ])
         } else if app.is_syncing_account {
             Line::from(vec![
@@ -115,10 +125,15 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled("⏳ Sincronizando dados com o Google...", theme.accent_style().add_modifier(Modifier::BOLD)),
             ])
         } else if app.account_sync_error.is_some() {
+            let err_desc = if app.auth.has_oauth() {
+                "(O Google rejeitou o token salvo)"
+            } else {
+                "(O Google rejeitou o cookie salvo)"
+            };
             Line::from(vec![
                 Span::styled("Status da Conta: ", theme.title_style()),
-                Span::styled("⚠️ Sessão / Cookie Expirado ", theme.liked_style().add_modifier(Modifier::BOLD)),
-                Span::styled("(O Google rejeitou o cookie salvo)", theme.muted_style()),
+                Span::styled("⚠️ Sessão Expirada ", theme.liked_style().add_modifier(Modifier::BOLD)),
+                Span::styled(err_desc, theme.muted_style()),
             ])
         } else {
             Line::from(vec![

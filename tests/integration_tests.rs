@@ -167,3 +167,29 @@ fn test_detect_font_size() {
     println!("Detected font size: {:?}", font_size);
     assert!(font_size.0 > 0 && font_size.1 > 0);
 }
+
+#[tokio::test]
+async fn test_oauth_user_profile_and_library_live() {
+    let auth_path = dirs::config_dir().map(|p| p.join("ytm-rs/auth.json")).unwrap();
+    let auth = AuthConfig::load(&auth_path);
+    if !auth.has_oauth() {
+        return;
+    }
+
+    let client = InnertubeClient::new(auth);
+
+    // Profile test
+    let prof = client.get_user_profile().await.expect("Failed to get user profile");
+    assert!(prof.is_some(), "Profile should be present for valid OAuth");
+    let p = prof.unwrap();
+    assert_eq!(p.name, "Jean Bitencourt");
+    assert!(!p.avatar_url.is_empty());
+
+    // Playlists test
+    let playlists = client.get_user_playlists().await.expect("Failed to get playlists");
+    assert!(!playlists.is_empty(), "Should find user playlists");
+
+    // Liked music test
+    let liked = client.get_liked_music().await.expect("Failed to get liked music");
+    assert!(!liked.is_empty(), "Should find liked music");
+}

@@ -148,9 +148,14 @@ pub fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &
                 Span::styled("⏳ Sincronizando perfil e biblioteca...", theme.accent_style()),
             ])
         } else if app.account_sync_error.is_some() {
+            let update_hint = if app.auth.has_oauth() {
+                "[c: Reconectar Google]"
+            } else {
+                "[c: Atualizar cookie]"
+            };
             Line::from(vec![
                 Span::styled("⚠️ Sessão expirada ", theme.liked_style().add_modifier(Modifier::BOLD)),
-                Span::styled("[c: Atualizar cookie]", theme.accent_style()),
+                Span::styled(update_hint, theme.accent_style()),
             ])
         } else {
             Line::from(vec![

@@ -244,6 +244,51 @@ pub fn parse_playlist_panel_video(renderer: &Value) -> Option<Track> {
 
 pub fn parse_playlist_results(val: &Value) -> Vec<Track> {
     let mut tracks = Vec::new();
+
+    // 1. TVHTML5 Liked songs or browse tab
+    if let Some(tabs) = val
+        .pointer("/contents/tvBrowseRenderer/content/tvSecondaryNavRenderer/sections/0/tvSecondaryNavSectionRenderer/tabs")
+        .and_then(|v| v.as_array())
+    {
+        for tab in tabs {
+            let tr = tab.get("tabRenderer");
+            let is_selected = tr.and_then(|t| t.get("selected")).and_then(|s| s.as_bool()).unwrap_or(false);
+            let title = tr.and_then(|t| t.get("title")).and_then(|s| s.as_str()).unwrap_or("");
+            if is_selected || title.contains("Liked") || title.contains("Curtidas") {
+                if let Some(items) = tr.and_then(|t| t.pointer("/content/tvSurfaceContentRenderer/content/gridRenderer/items")).and_then(|v| v.as_array()) {
+                    for it in items {
+                        if let Some(tile) = it.get("tileRenderer") {
+                            if let Some(track) = parse_tv_tile_track(tile) {
+                                tracks.push(track);
+                            }
+                        }
+                    }
+                    if !tracks.is_empty() {
+                        return tracks;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. TVHTML5 Playlist detail list (right column)
+    if let Some(contents) = val
+        .pointer("/contents/tvBrowseRenderer/content/tvSurfaceContentRenderer/content/twoColumnRenderer/rightColumn/playlistVideoListRenderer/contents")
+        .and_then(|v| v.as_array())
+    {
+        for it in contents {
+            if let Some(tile) = it.get("tileRenderer") {
+                if let Some(track) = parse_tv_tile_track(tile) {
+                    tracks.push(track);
+                }
+            }
+        }
+        if !tracks.is_empty() {
+            return tracks;
+        }
+    }
+
+    // 3. Web Remix formats
     let items = val
         .pointer("/contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer/contents/0/musicPlaylistShelfRenderer/contents")
         .or_else(|| val.pointer("/contents/twoColumnBrowseResultsRenderer/secondaryContents/sectionListRenderer/contents/0/musicPlaylistShelfRenderer/contents"))
@@ -475,8 +520,41 @@ pub fn parse_album_browse_tracks(val: &Value) -> (String, Vec<Track>) {
     (album_title, tracks)
 }
 
-/// Parses the user profile from `account/account_menu` response
+/// Parses the user profile from `guide` (TV mode) response
+pub fn parse_tv_user_profile(val: &Value) -> Option<UserProfile> {
+    let guide_account = val
+        .pointer("/topbar/guideSectionRenderer/items/0/guideAccountEntryRenderer")
+        .or_else(|| val.pointer("/items/0/guideAccountEntryRenderer"))?;
+
+    let name = guide_account
+        .pointer("/title/simpleText")
+        .or_else(|| guide_account.pointer("/title/runs/0/text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Usuário")
+        .to_string();
+
+    let avatar_url = guide_account
+        .pointer("/thumbnail/thumbnails")
+        .and_then(|th| th.as_array())
+        .and_then(|arr| arr.last())
+        .and_then(|t| t.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Some(UserProfile {
+        name,
+        handle: String::new(),
+        avatar_url,
+    })
+}
+
+/// Parses the user profile from `account/account_menu` (Web mode) or `guide` (TV mode) response
 pub fn parse_user_profile(val: &Value) -> Option<UserProfile> {
+    if let Some(prof) = parse_tv_user_profile(val) {
+        return Some(prof);
+    }
+
     let header = val
         .pointer("/actions/0/openPopupAction/popup/multiPageMenuRenderer/header/activeAccountHeaderRenderer")
         .or_else(|| val.pointer("/header/activeAccountHeaderRenderer"))?;
@@ -515,6 +593,35 @@ pub fn parse_user_profile(val: &Value) -> Option<UserProfile> {
 /// Parses user's playlists from `FEmusic_liked_playlists` or library browse response
 pub fn parse_library_playlists(val: &Value) -> Vec<PlaylistSummary> {
     let mut playlists = Vec::new();
+
+    // 1. Check TVHTML5 tvBrowseRenderer tabs
+    if let Some(tabs) = val
+        .pointer("/contents/tvBrowseRenderer/content/tvSecondaryNavRenderer/sections/0/tvSecondaryNavSectionRenderer/tabs")
+        .and_then(|v| v.as_array())
+    {
+        for tab in tabs {
+            let tr = tab.get("tabRenderer");
+            let is_selected = tr.and_then(|t| t.get("selected")).and_then(|s| s.as_bool()).unwrap_or(false);
+            let title = tr.and_then(|t| t.get("title")).and_then(|s| s.as_str()).unwrap_or("");
+            if is_selected || title.eq_ignore_ascii_case("Playlists") {
+                if let Some(items) = tr.and_then(|t| t.pointer("/content/tvSurfaceContentRenderer/content/gridRenderer/items")).and_then(|v| v.as_array()) {
+                    for it in items {
+                        if let Some(tile) = it.get("tileRenderer") {
+                            if let Some(pl) = parse_tv_tile_playlist(tile) {
+                                if pl.id != "VLLM" && pl.id != "LM" && pl.id != "FEmusic_liked_videos" && !pl.id.is_empty() {
+                                    playlists.push(pl);
+                                }
+                            }
+                        }
+                    }
+                    if !playlists.is_empty() {
+                        return playlists;
+                    }
+                }
+            }
+        }
+    }
+
     let mut raw_items = Vec::new();
 
     let items_array = val
@@ -671,6 +778,155 @@ fn parse_responsive_playlist(renderer: &Value) -> Option<PlaylistSummary> {
     })
 }
 
+/// Parses a playlist summary from a TVHTML5 `tileRenderer`
+pub fn parse_tv_tile_playlist(tile: &Value) -> Option<PlaylistSummary> {
+    let raw_id = tile
+        .pointer("/onSelectCommand/browseEndpoint/browseId")
+        .or_else(|| tile.pointer("/metadata/tileMetadataRenderer/title/runs/0/navigationEndpoint/browseEndpoint/browseId"))
+        .or_else(|| tile.pointer("/onLongPressCommand/showMenuCommand/title/runs/0/navigationEndpoint/browseEndpoint/browseId"))
+        .and_then(|v| v.as_str())?;
+
+    let browse_id = if raw_id.starts_with("VL") {
+        raw_id[2..].to_string()
+    } else {
+        raw_id.to_string()
+    };
+
+    let title = tile
+        .pointer("/metadata/tileMetadataRenderer/title/runs/0/text")
+        .or_else(|| tile.pointer("/metadata/tileMetadataRenderer/title/simpleText"))
+        .or_else(|| tile.pointer("/onLongPressCommand/showMenuCommand/title/runs/0/text"))
+        .and_then(|v| v.as_str())?
+        .to_string();
+
+    let mut subtitle = tile
+        .pointer("/onLongPressCommand/showMenuCommand/subtitle/simpleText")
+        .or_else(|| tile.pointer("/onLongPressCommand/showMenuCommand/subtitle/runs/0/text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let mut count_text = String::new();
+
+    if let Some(lines) = tile.pointer("/metadata/tileMetadataRenderer/lines").and_then(|v| v.as_array()) {
+        for line in lines {
+            if let Some(items) = line.pointer("/lineRenderer/items").and_then(|v| v.as_array()) {
+                for item in items {
+                    let txt = item.pointer("/lineItemRenderer/text/simpleText")
+                        .or_else(|| item.pointer("/lineItemRenderer/text/runs/0/text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    let lower = txt.to_lowercase();
+                    if lower.contains("track") || lower.contains("song") || lower.contains("faixa") || lower.contains("música") || lower.contains("musica") {
+                        count_text = txt.to_string();
+                    } else if subtitle.is_empty() && !lower.contains("playlist") && !lower.contains("auto playlist") {
+                        subtitle = txt.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    let thumbnail_url = tile
+        .pointer("/header/tileHeaderRenderer/thumbnail/thumbnails")
+        .or_else(|| tile.pointer("/onLongPressCommand/showMenuCommand/thumbnail/thumbnails"))
+        .and_then(|th| th.as_array())
+        .and_then(|arr| arr.last())
+        .and_then(|t| t.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Some(PlaylistSummary {
+        id: browse_id,
+        title,
+        subtitle,
+        count_text,
+        thumbnail_url,
+    })
+}
+
+/// Parses a track from a TVHTML5 `tileRenderer`
+pub fn parse_tv_tile_track(tile: &Value) -> Option<Track> {
+    let video_id = tile
+        .pointer("/contentId")
+        .or_else(|| tile.pointer("/onSelectCommand/watchEndpoint/videoId"))
+        .or_else(|| tile.pointer("/metadata/tileMetadataRenderer/title/runs/0/navigationEndpoint/watchEndpoint/videoId"))
+        .or_else(|| tile.pointer("/onLongPressCommand/showMenuCommand/contentId"))
+        .or_else(|| tile.pointer("/onLongPressCommand/showMenuCommand/menu/menuRenderer/items/0/menuNavigationItemRenderer/navigationEndpoint/watchEndpoint/videoId"))
+        .and_then(|v| v.as_str())?
+        .to_string();
+
+    let title = tile
+        .pointer("/metadata/tileMetadataRenderer/title/runs/0/text")
+        .or_else(|| tile.pointer("/metadata/tileMetadataRenderer/title/simpleText"))
+        .or_else(|| tile.pointer("/onLongPressCommand/showMenuCommand/title/runs/0/text"))
+        .and_then(|v| v.as_str())?
+        .to_string();
+
+    let mut artist = "Artista Desconhecido".to_string();
+    let mut album = String::new();
+
+    if let Some(lines) = tile.pointer("/metadata/tileMetadataRenderer/lines").and_then(|v| v.as_array()) {
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(items) = line.pointer("/lineRenderer/items").and_then(|v| v.as_array()) {
+                for item in items {
+                    let txt = item.pointer("/lineItemRenderer/text/simpleText")
+                        .or_else(|| item.pointer("/lineItemRenderer/text/runs/0/text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    if i == 0 && !txt.is_empty() {
+                        artist = txt.to_string();
+                    } else if i > 0 && !is_view_count(txt) && !is_category_label(txt) && !is_duration_str(txt) && !txt.is_empty() {
+                        if album.is_empty() {
+                            album = txt.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if artist == "Artista Desconhecido" {
+        if let Some(sub) = tile.pointer("/onLongPressCommand/showMenuCommand/subtitle/simpleText")
+            .or_else(|| tile.pointer("/onLongPressCommand/showMenuCommand/subtitle/runs/0/text"))
+            .and_then(|t| t.as_str())
+        {
+            if !sub.is_empty() {
+                artist = sub.to_string();
+            }
+        }
+    }
+
+    let mut duration_secs = 0;
+    if let Some(overlays) = tile.pointer("/header/tileHeaderRenderer/thumbnailOverlays").and_then(|v| v.as_array()) {
+        for ov in overlays {
+            if let Some(dur_str) = ov.pointer("/thumbnailOverlayTimeStatusRenderer/text/simpleText")
+                .or_else(|| ov.pointer("/thumbnailOverlayTimeStatusRenderer/text/runs/0/text"))
+                .and_then(|t| t.as_str())
+            {
+                let s = parse_duration_to_secs(dur_str);
+                if s > 0 {
+                    duration_secs = s;
+                    break;
+                }
+            }
+        }
+    }
+
+    let thumbnail_url = tile
+        .pointer("/header/tileHeaderRenderer/thumbnail/thumbnails")
+        .or_else(|| tile.pointer("/onLongPressCommand/showMenuCommand/thumbnail/thumbnails"))
+        .and_then(|th| th.as_array())
+        .and_then(|arr| arr.last())
+        .and_then(|t| t.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Some(Track::new(video_id, title, artist, album, duration_secs, thumbnail_url))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,6 +1040,177 @@ mod tests {
         assert_eq!(playlists[0].subtitle, "Playlist");
         assert_eq!(playlists[0].count_text, "45 músicas");
         assert_eq!(playlists[0].thumbnail_url, "https://lh3.googleusercontent.com/pl_thumb.jpg");
+    }
+
+    #[test]
+    fn test_parse_tv_user_profile() {
+        let raw = json!({
+            "topbar": {
+                "guideSectionRenderer": {
+                    "items": [
+                        {
+                            "guideAccountEntryRenderer": {
+                                "title": { "simpleText": "Jean Bitencourt" },
+                                "thumbnail": {
+                                    "thumbnails": [
+                                        { "url": "https://yt3.ggpht.com/avatar_88.jpg", "width": 88, "height": 88 }
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        });
+
+        let profile = parse_user_profile(&raw).expect("tv profile should parse");
+        assert_eq!(profile.name, "Jean Bitencourt");
+        assert_eq!(profile.avatar_url, "https://yt3.ggpht.com/avatar_88.jpg");
+    }
+
+    #[test]
+    fn test_parse_tv_library_playlists() {
+        let raw = json!({
+            "contents": {
+                "tvBrowseRenderer": {
+                    "content": {
+                        "tvSecondaryNavRenderer": {
+                            "sections": [
+                                {
+                                    "tvSecondaryNavSectionRenderer": {
+                                        "tabs": [
+                                            {
+                                                "tabRenderer": {
+                                                    "title": "Playlists",
+                                                    "selected": true,
+                                                    "content": {
+                                                        "tvSurfaceContentRenderer": {
+                                                            "content": {
+                                                                "gridRenderer": {
+                                                                    "items": [
+                                                                        {
+                                                                            "tileRenderer": {
+                                                                                "onSelectCommand": {
+                                                                                    "browseEndpoint": { "browseId": "VLLM" }
+                                                                                },
+                                                                                "metadata": {
+                                                                                    "tileMetadataRenderer": {
+                                                                                        "title": { "runs": [{ "text": "Liked Music" }] }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        },
+                                                                        {
+                                                                            "tileRenderer": {
+                                                                                "onSelectCommand": {
+                                                                                    "browseEndpoint": { "browseId": "VLPL_rock_123" }
+                                                                                },
+                                                                                "metadata": {
+                                                                                    "tileMetadataRenderer": {
+                                                                                        "title": { "runs": [{ "text": "Rock Classics" }] },
+                                                                                        "lines": [
+                                                                                            {
+                                                                                                "lineRenderer": {
+                                                                                                    "items": [
+                                                                                                        { "lineItemRenderer": { "text": { "simpleText": "Jean Bitencourt" } } }
+                                                                                                    ]
+                                                                                                }
+                                                                                            },
+                                                                                            {
+                                                                                                "lineRenderer": {
+                                                                                                    "items": [
+                                                                                                        { "lineItemRenderer": { "text": { "simpleText": "Playlist • 50 tracks" } } }
+                                                                                                    ]
+                                                                                                }
+                                                                                            }
+                                                                                        ]
+                                                                                    }
+                                                                                },
+                                                                                "header": {
+                                                                                    "tileHeaderRenderer": {
+                                                                                        "thumbnail": {
+                                                                                            "thumbnails": [{ "url": "https://yt3.ggpht.com/rock_thumb.jpg" }]
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    ]
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        });
+
+        let playlists = parse_library_playlists(&raw);
+        assert_eq!(playlists.len(), 1);
+        assert_eq!(playlists[0].id, "PL_rock_123");
+        assert_eq!(playlists[0].title, "Rock Classics");
+        assert_eq!(playlists[0].subtitle, "Jean Bitencourt");
+        assert_eq!(playlists[0].count_text, "Playlist • 50 tracks");
+        assert_eq!(playlists[0].thumbnail_url, "https://yt3.ggpht.com/rock_thumb.jpg");
+    }
+
+    #[test]
+    fn test_parse_tv_tile_track() {
+        let raw = json!({
+            "tileRenderer": {
+                "contentId": "track12345",
+                "metadata": {
+                    "tileMetadataRenderer": {
+                        "title": { "runs": [{ "text": "The Trooper" }] },
+                        "lines": [
+                            {
+                                "lineRenderer": {
+                                    "items": [
+                                        { "lineItemRenderer": { "text": { "simpleText": "Iron Maiden" } } }
+                                    ]
+                                }
+                            },
+                            {
+                                "lineRenderer": {
+                                    "items": [
+                                        { "lineItemRenderer": { "text": { "simpleText": "Piece of Mind" } } }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                },
+                "header": {
+                    "tileHeaderRenderer": {
+                        "thumbnail": {
+                            "thumbnails": [{ "url": "https://i.ytimg.com/vi/track12345/hqdefault.jpg" }]
+                        },
+                        "thumbnailOverlays": [
+                            {
+                                "thumbnailOverlayTimeStatusRenderer": {
+                                    "text": { "simpleText": "4:11" }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        });
+
+        let track = parse_tv_tile_track(&raw["tileRenderer"]).expect("tv track should parse");
+        assert_eq!(track.video_id, "track12345");
+        assert_eq!(track.title, "The Trooper");
+        assert_eq!(track.artist, "Iron Maiden");
+        assert_eq!(track.album, "Piece of Mind");
+        assert_eq!(track.duration_secs, 251);
+        assert_eq!(track.thumbnail_url, "https://i.ytimg.com/vi/track12345/hqdefault.jpg");
     }
 
     #[test]
