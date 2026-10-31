@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 
 pub mod auth;
 pub mod client;
+pub mod parsers;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct UserProfile {
+    pub name: String,
+    pub handle: String,
+    pub avatar_url: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Track {

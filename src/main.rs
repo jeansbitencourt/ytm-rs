@@ -551,9 +551,11 @@ async fn run_tui(config: AppConfig) -> Result<()> {
             }
         }
 
-        // Update cover art and thumbnail state if needed
+        // Update cover art, thumbnail, avatar and account sync if needed
+        app.poll_account_sync().await;
         app.update_cover_if_needed();
         app.update_thumbnails_if_needed();
+        app.update_avatar_if_needed();
 
         // Draw UI
         terminal.draw(|f| ui::render_ui(f, &mut app))?;

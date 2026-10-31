@@ -374,6 +374,16 @@ impl AudioDaemon {
             }
         }
 
+        // Sync with YouTube Music account if authenticated
+        let auth = crate::innertube::auth::AuthConfig::load(&self.config.auth_file);
+        if auth.is_authenticated() {
+            let vid = video_id.clone();
+            tokio::spawn(async move {
+                let client = crate::innertube::client::InnertubeClient::new(auth);
+                let _ = client.like_track(&vid, is_liked).await;
+            });
+        }
+
         // Send desktop notification
         let msg = if is_liked {
             format!("♥ Adicionada aos favoritos:\n{} - {}", current_track.title, current_track.artist)
