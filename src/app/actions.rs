@@ -51,10 +51,14 @@ impl App {
         self.is_syncing_account = true;
         self.account_sync_error = None;
 
-        let client = self.client.clone();
+        let mut client = self.client.clone();
+        let auth_file = self.config.auth_file.clone();
         let tx = self.account_sync_tx.clone();
 
         tokio::spawn(async move {
+            // Auto refresh OAuth token if needed
+            let _ = client.ensure_valid_token(Some(&auth_file)).await;
+
             let profile = client.get_user_profile().await.ok().flatten();
             let liked_tracks = client.get_liked_music().await.unwrap_or_default();
             let playlists = client.get_user_playlists().await.unwrap_or_default();
@@ -65,6 +69,108 @@ impl App {
                 playlists,
             });
         });
+    }
+
+    pub fn start_oauth_flow(&mut self) {
+        if self.is_oauth_polling {
+            return;
+        }
+
+        self.is_oauth_polling = true;
+        self.oauth_user_code = None;
+        self.oauth_verification_url = None;
+        self.auth_message = Some(("⏳ Conectando ao Google...".to_string(), true));
+
+        let tx = self.oauth_tx.clone();
+
+        tokio::spawn(async move {
+            let res = match crate::innertube::oauth::request_device_code(crate::innertube::oauth::DEFAULT_CLIENT_ID).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(super::OAuthProgress::Failed(format!("Erro ao solicitar código: {}", e)));
+                    return;
+                }
+            };
+
+            let _ = tx.send(super::OAuthProgress::CodeReady {
+                user_code: res.user_code.clone(),
+                verification_url: res.verification_url.clone(),
+            });
+
+            let poll_interval = std::time::Duration::from_secs(res.interval.max(5));
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(res.expires_in);
+
+            while start.elapsed() < timeout {
+                tokio::time::sleep(poll_interval).await;
+                match crate::innertube::oauth::poll_token_once(
+                    crate::innertube::oauth::DEFAULT_CLIENT_ID,
+                    crate::innertube::oauth::DEFAULT_CLIENT_SECRET,
+                    &res.device_code,
+                ).await {
+                    Ok(crate::innertube::oauth::PollResult::Success(tok)) => {
+                        let _ = tx.send(super::OAuthProgress::TokenReady(tok));
+                        return;
+                    }
+                    Ok(crate::innertube::oauth::PollResult::Pending) => {}
+                    Ok(crate::innertube::oauth::PollResult::SlowDown) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
+                    Ok(crate::innertube::oauth::PollResult::Expired) => {
+                        let _ = tx.send(super::OAuthProgress::Failed("O código expirou. Pressione 'o' para reiniciar.".to_string()));
+                        return;
+                    }
+                    Ok(crate::innertube::oauth::PollResult::Error(err)) => {
+                        let _ = tx.send(super::OAuthProgress::Failed(format!("Erro ao autorizar: {}", err)));
+                        return;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(super::OAuthProgress::Failed(format!("Falha na rede: {}", e)));
+                        return;
+                    }
+                }
+            }
+            let _ = tx.send(super::OAuthProgress::Failed("Tempo limite de autorização esgotado.".to_string()));
+        });
+    }
+
+    pub async fn poll_oauth_progress(&mut self) {
+        while let Ok(msg) = self.oauth_rx.try_recv() {
+            match msg {
+                super::OAuthProgress::CodeReady { user_code, verification_url } => {
+                    self.oauth_user_code = Some(user_code);
+                    self.oauth_verification_url = Some(verification_url);
+                    self.auth_message = Some(("Código gerado! Digite o código no navegador.".to_string(), true));
+                }
+                super::OAuthProgress::TokenReady(tok) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+
+                    self.auth.oauth_token = Some(tok.access_token.clone());
+                    if let Some(ref_tok) = tok.refresh_token {
+                        self.auth.refresh_token = Some(ref_tok);
+                    }
+                    self.auth.token_expiry = Some(now + tok.expires_in);
+                    let _ = self.auth.save(&self.config.auth_file);
+
+                    self.client.auth = self.auth.clone();
+                    self.is_oauth_polling = false;
+                    self.oauth_user_code = None;
+                    self.oauth_verification_url = None;
+                    self.auth_message = Some(("✓ Conta Google conectada com sucesso!".to_string(), true));
+
+                    self.spawn_account_sync();
+                }
+                super::OAuthProgress::Failed(err) => {
+                    self.is_oauth_polling = false;
+                    self.oauth_user_code = None;
+                    self.oauth_verification_url = None;
+                    self.auth_message = Some((err, false));
+                }
+            }
+        }
     }
 
     pub async fn poll_account_sync(&mut self) {

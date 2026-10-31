@@ -44,6 +44,13 @@ pub struct AccountSyncResult {
     pub playlists: Vec<PlaylistSummary>,
 }
 
+#[derive(Debug, Clone)]
+pub enum OAuthProgress {
+    CodeReady { user_code: String, verification_url: String },
+    TokenReady(crate::innertube::oauth::TokenResponse),
+    Failed(String),
+}
+
 pub struct App {
     pub config: AppConfig,
     pub theme: Theme,
@@ -74,6 +81,11 @@ pub struct App {
     pub show_auth_modal: bool,
     pub auth_input: String,
     pub auth_message: Option<(String, bool)>,
+    pub oauth_user_code: Option<String>,
+    pub oauth_verification_url: Option<String>,
+    pub is_oauth_polling: bool,
+    pub oauth_tx: UnboundedSender<OAuthProgress>,
+    pub oauth_rx: UnboundedReceiver<OAuthProgress>,
     pub should_quit: bool,
     pub playerbar_area: Rect,
     pub header_search_area: Rect,
@@ -175,6 +187,7 @@ impl App {
         let (thumb_tx, thumb_rx) = unbounded_channel();
         let (avatar_tx, avatar_rx) = unbounded_channel();
         let (account_sync_tx, account_sync_rx) = unbounded_channel();
+        let (oauth_tx, oauth_rx) = unbounded_channel();
 
         let mut app = Self {
             config,
@@ -206,6 +219,11 @@ impl App {
             show_auth_modal: false,
             auth_input: String::new(),
             auth_message: None,
+            oauth_user_code: None,
+            oauth_verification_url: None,
+            is_oauth_polling: false,
+            oauth_tx,
+            oauth_rx,
             should_quit: false,
             playerbar_area: Rect::default(),
             header_search_area: Rect::default(),

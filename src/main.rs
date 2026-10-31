@@ -82,6 +82,8 @@ enum CtlAction {
 enum AuthAction {
     /// Exibe o status da autenticação atual
     Status,
+    /// Inicia login interativo com a conta Google via código na TV (google.com/device)
+    Login,
     /// Salva cookies do YouTube Music
     Cookies { value: String },
     /// Remove credenciais de autenticação
@@ -456,12 +458,78 @@ async fn run_auth(config: AppConfig, action: Option<AuthAction>) -> Result<()> {
             let auth = AuthConfig::load(&config.auth_file);
             if auth.is_authenticated() {
                 println!("✓ Autenticado no YouTube Music.");
+                if auth.has_oauth() {
+                    println!("  Método: Google OAuth 2.0 (Device Code - Token permanente).");
+                }
                 if auth.sapisid.is_some() {
                     println!("  Método: Cookies / SAPISID ativo.");
                 }
             } else {
-                println!("✗ Não autenticado. Execute 'ytm-rs auth' para autenticar.");
+                println!("✗ Não autenticado. Execute 'ytm-rs auth login' para conectar sua conta.");
             }
+        }
+        Some(AuthAction::Login) => {
+            println!("Iniciando autenticação Google Device Flow (RFC 8628)...");
+            let device_res = ytm_rs::innertube::oauth::request_device_code(ytm_rs::innertube::oauth::DEFAULT_CLIENT_ID).await?;
+            println!("\n╔══════════════════════════════════════════════════════════════════╗");
+            println!("║  1. Acesse no navegador: {:<39} ║", device_res.verification_url);
+            println!("║  2. Digite o código:     {:<39} ║", device_res.user_code);
+            println!("║  3. Conecte sua conta Google e clique em Permitir               ║");
+            println!("╚══════════════════════════════════════════════════════════════════╝\n");
+            println!("⏳ Aguardando autorização no navegador (código expira em {} min)...", device_res.expires_in / 60);
+
+            let poll_interval = Duration::from_secs(device_res.interval.max(5));
+            let start = std::time::Instant::now();
+            let timeout = Duration::from_secs(device_res.expires_in);
+
+            while start.elapsed() < timeout {
+                tokio::time::sleep(poll_interval).await;
+                match ytm_rs::innertube::oauth::poll_token_once(
+                    ytm_rs::innertube::oauth::DEFAULT_CLIENT_ID,
+                    ytm_rs::innertube::oauth::DEFAULT_CLIENT_SECRET,
+                    &device_res.device_code,
+                ).await? {
+                    ytm_rs::innertube::oauth::PollResult::Success(tok) => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+
+                        let mut auth = AuthConfig::load(&config.auth_file);
+                        auth.oauth_token = Some(tok.access_token.clone());
+                        if let Some(ref_tok) = tok.refresh_token {
+                            auth.refresh_token = Some(ref_tok);
+                        }
+                        auth.token_expiry = Some(now + tok.expires_in);
+                        auth.save(&config.auth_file)?;
+
+                        println!("\n✓ Autorização concluída com sucesso!");
+                        let client = ytm_rs::innertube::client::InnertubeClient::new(auth);
+                        if let Ok(Some(profile)) = client.get_user_profile().await {
+                            println!("✓ Conectado como: {} ({})", profile.name, profile.handle);
+                        }
+                        println!("✓ Credenciais salvas em: {:?}", config.auth_file);
+                        println!("O token permanente foi registrado e será renovado automaticamente!");
+                        return Ok(());
+                    }
+                    ytm_rs::innertube::oauth::PollResult::Pending => {
+                        print!(".");
+                        std::io::Write::flush(&mut std::io::stdout())?;
+                    }
+                    ytm_rs::innertube::oauth::PollResult::SlowDown => {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                    ytm_rs::innertube::oauth::PollResult::Expired => {
+                        println!("\n✗ O código expirou. Execute 'ytm-rs auth login' novamente.");
+                        return Ok(());
+                    }
+                    ytm_rs::innertube::oauth::PollResult::Error(err) => {
+                        println!("\n✗ Erro ao autorizar: {}", err);
+                        return Ok(());
+                    }
+                }
+            }
+            println!("\n✗ Tempo limite de autorização esgotado.");
         }
         Some(AuthAction::Cookies { value }) => {
             let mut auth = AuthConfig::load(&config.auth_file);
@@ -478,11 +546,10 @@ async fn run_auth(config: AppConfig, action: Option<AuthAction>) -> Result<()> {
         }
         None => {
             println!("=== Autenticação do YouTube Music (YTM-RS) ===");
-            println!("1. Abra https://music.youtube.com no seu navegador");
-            println!("2. Abra o DevTools (F12) -> aba Rede (Network)");
-            println!("3. Faça uma busca ou toque uma música");
-            println!("4. Copie o valor do cabeçalho 'cookie' da requisição");
-            println!("5. Execute: ytm-rs auth cookies \"<conteúdo do cookie>\"\n");
+            println!("Opção 1 (Recomendada): Login Google permanente via código:");
+            println!("  execute: ytm-rs auth login\n");
+            println!("Opção 2: Salvar cookies do navegador (DevTools):");
+            println!("  execute: ytm-rs auth cookies \"<conteúdo do cookie>\"\n");
             let auth = AuthConfig::load(&config.auth_file);
             if auth.is_authenticated() {
                 println!("Status atual: ✓ Autenticado");
@@ -553,6 +620,7 @@ async fn run_tui(config: AppConfig) -> Result<()> {
 
         // Update cover art, thumbnail, avatar and account sync if needed
         app.poll_account_sync().await;
+        app.poll_oauth_progress().await;
         app.update_cover_if_needed();
         app.update_thumbnails_if_needed();
         app.update_avatar_if_needed();

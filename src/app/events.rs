@@ -18,6 +18,11 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.show_auth_modal = false;
+                    self.is_oauth_polling = false;
+                    self.oauth_user_code = None;
+                }
+                KeyCode::Char('o') | KeyCode::Char('O') if self.auth_input.is_empty() => {
+                    self.start_oauth_flow();
                 }
                 KeyCode::Enter => {
                     if !self.auth_input.trim().is_empty() {
@@ -35,6 +40,8 @@ impl App {
                             self.auth_message = Some(("✓ Autenticado com sucesso no YouTube Music!".to_string(), true));
                             self.auth_input.clear();
                         }
+                    } else if !self.is_oauth_polling && self.oauth_user_code.is_none() {
+                        self.start_oauth_flow();
                     }
                 }
                 KeyCode::Backspace => {
@@ -49,6 +56,8 @@ impl App {
                         self.avatar_protocol = None;
                         self.current_avatar_image = None;
                         self.user_playlists.clear();
+                        self.is_oauth_polling = false;
+                        self.oauth_user_code = None;
                         self.auth_message = Some(("✓ Desconectado. Modo Público ativo.".to_string(), true));
                     }
                 }

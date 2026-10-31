@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod auth;
 pub mod client;
+pub mod oauth;
 pub mod parsers;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

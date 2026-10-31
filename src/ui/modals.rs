@@ -140,14 +140,37 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
     ]);
     f.render_widget(p_status, chunks[0]);
 
-    // 2. Instructions
-    let instr_lines = vec![
-        Line::from(Span::styled("Como obter seu Cookie:", theme.title_style())),
-        Line::from(Span::styled(" 1. Acesse https://music.youtube.com no seu navegador e faça login", theme.muted_style())),
-        Line::from(Span::styled(" 2. Abra o DevTools (F12) -> aba Rede (Network) -> recarregue a página", theme.muted_style())),
-        Line::from(Span::styled(" 3. Clique em qualquer requisição e copie o valor do cabeçalho 'cookie'", theme.muted_style())),
-        Line::from(Span::styled(" 4. Cole o valor abaixo (Ctrl+Shift+V) e pressione Enter", theme.muted_style())),
-    ];
+    // 2. Instructions / OAuth prompt
+    let instr_lines = if let Some(code) = &app.oauth_user_code {
+        let url = app.oauth_verification_url.as_deref().unwrap_or("https://www.google.com/device");
+        vec![
+            Line::from(vec![
+                Span::styled("Login Google Device em andamento: ", theme.title_style()),
+                Span::styled("Autorize em qualquer navegador", theme.text_style()),
+            ]),
+            Line::from(vec![
+                Span::styled(" 1. Acesse: ", theme.muted_style()),
+                Span::styled(url, theme.accent_style().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)),
+            ]),
+            Line::from(vec![
+                Span::styled(" 2. Código: ", theme.muted_style()),
+                Span::styled(format!("[  {}  ]", code), theme.playing_indicator_style().add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(Span::styled(" 3. Conecte sua conta e clique em Permitir", theme.muted_style())),
+            Line::from(Span::styled(" ⏳ Aguardando aprovação no navegador...", theme.playing_indicator_style())),
+        ]
+    } else {
+        vec![
+            Line::from(vec![
+                Span::styled("[o] Iniciar Login Google (Permanente): ", theme.accent_style().add_modifier(Modifier::BOLD)),
+                Span::styled("Gera código para google.com/device", theme.text_style()),
+            ]),
+            Line::from(Span::styled(" ── Ou cole o cabeçalho Cookie do DevTools abaixo: ──", theme.muted_style())),
+            Line::from(Span::styled(" 1. Acesse https://music.youtube.com e faça login", theme.muted_style())),
+            Line::from(Span::styled(" 2. Abra DevTools (F12) -> aba Rede -> copie o cabeçalho 'cookie'", theme.muted_style())),
+            Line::from(Span::styled(" 3. Cole abaixo (Ctrl+Shift+V) e pressione Enter", theme.muted_style())),
+        ]
+    };
     let p_instr = Paragraph::new(instr_lines);
     f.render_widget(p_instr, chunks[1]);
 
@@ -156,10 +179,14 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme.focused_border_style())
-        .title(Span::styled(" Cole o Cookie aqui ", theme.accent_style()));
+        .title(Span::styled(" Cole o Cookie aqui (opcional) ", theme.accent_style()));
 
     let display_text = if app.auth_input.is_empty() {
-        Span::styled("Cole o cabeçalho cookie aqui e pressione Enter... █", theme.muted_style())
+        if app.is_oauth_polling {
+            Span::styled("Aguardando login no navegador pelo link acima... █", theme.playing_indicator_style())
+        } else {
+            Span::styled("Pressione [o] para Login Google ou cole o cookie aqui... █", theme.muted_style())
+        }
     } else {
         let masked = if app.auth_input.len() > 46 {
             format!("{}... ({} caracteres) █", &app.auth_input[..36], app.auth_input.len())
@@ -185,7 +212,12 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
 
     // 5. Footer Shortcuts
     let footer_line = Line::from(vec![
-        Span::styled("[Enter] Salvar Cookie  ", theme.accent_style().add_modifier(Modifier::BOLD)),
+        if app.is_oauth_polling {
+            Span::styled("⏳ Aguardando Google...  ", theme.playing_indicator_style())
+        } else {
+            Span::styled("[o] Login Google (TV)  ", theme.accent_style().add_modifier(Modifier::BOLD))
+        },
+        Span::styled("[Enter] Salvar Cookie  ", theme.text_style().add_modifier(Modifier::BOLD)),
         if app.auth.is_authenticated() {
             Span::styled("[l] Desconectar Conta  ", theme.liked_style())
         } else {

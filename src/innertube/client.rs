@@ -52,17 +52,42 @@ impl InnertubeClient {
             }
         }
 
-        if let Some(auth_hdr) = self.auth.get_sapisid_auth_header(WEB_REMIX_ORIGIN) {
-            if let Ok(val) = HeaderValue::from_str(&auth_hdr) {
+        if let Some(token) = &self.auth.oauth_token {
+            if let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", token)) {
                 headers.insert(AUTHORIZATION, val);
             }
-        } else if let Some(token) = &self.auth.oauth_token {
-            if let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", token)) {
+        } else if let Some(auth_hdr) = self.auth.get_sapisid_auth_header(WEB_REMIX_ORIGIN) {
+            if let Ok(val) = HeaderValue::from_str(&auth_hdr) {
                 headers.insert(AUTHORIZATION, val);
             }
         }
 
         headers
+    }
+
+    pub async fn ensure_valid_token(&mut self, auth_path: Option<&std::path::Path>) -> Result<()> {
+        if self.auth.is_token_expired() {
+            if let Some(ref_tok) = &self.auth.refresh_token {
+                let tok = super::oauth::refresh_access_token(
+                    super::oauth::DEFAULT_CLIENT_ID,
+                    super::oauth::DEFAULT_CLIENT_SECRET,
+                    ref_tok,
+                )
+                .await?;
+
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                self.auth.oauth_token = Some(tok.access_token);
+                self.auth.token_expiry = Some(now + tok.expires_in);
+                if let Some(path) = auth_path {
+                    let _ = self.auth.save(path);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<Track>> {

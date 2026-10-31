@@ -10,6 +10,8 @@ pub struct AuthConfig {
     pub sapisid: Option<String>,
     pub authorization: Option<String>,
     pub oauth_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub token_expiry: Option<u64>,
 }
 
 impl AuthConfig {
@@ -34,7 +36,23 @@ impl AuthConfig {
     }
 
     pub fn is_authenticated(&self) -> bool {
-        self.cookies.is_some() || self.sapisid.is_some() || self.oauth_token.is_some()
+        self.cookies.is_some() || self.sapisid.is_some() || self.oauth_token.is_some() || self.refresh_token.is_some()
+    }
+
+    pub fn is_token_expired(&self) -> bool {
+        if let Some(exp) = self.token_expiry {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            now + 60 >= exp
+        } else {
+            self.oauth_token.is_none() && self.refresh_token.is_some()
+        }
+    }
+
+    pub fn has_oauth(&self) -> bool {
+        self.refresh_token.is_some() || self.oauth_token.is_some()
     }
 
     pub fn get_sapisid_auth_header(&self, origin: &str) -> Option<String> {
