@@ -11,7 +11,7 @@ pub fn render_help_modal(f: &mut Frame, area: Rect, app: &App) {
 
     // Centered modal calculation
     let width = 74.min(area.width.saturating_sub(4));
-    let height = 24.min(area.height.saturating_sub(2));
+    let height = 26.min(area.height.saturating_sub(2));
 
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
@@ -42,6 +42,7 @@ pub fn render_help_modal(f: &mut Frame, area: Rect, app: &App) {
         ("  f", "Favoritar música atual (Like)"),
         ("  a", "Adicionar item selecionado (faixa/álbum/artista) à fila"),
         ("  r", "Iniciar Rádio Infinita a partir da faixa selecionada"),
+        ("  F5 / Ctrl+R", "Sincronizar e recarregar biblioteca com YouTube"),
         ("", ""),
         ("Controles de Janela & Sistema:", ""),
         ("  c / C", "Gerenciar Conta / Autenticação (Cookie YTM)"),

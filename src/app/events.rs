@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{ActivePanel, App, ContentView};
 use crate::audio::daemon::send_daemon_command;
@@ -66,6 +66,14 @@ impl App {
                 }
                 _ => {}
             }
+            return Ok(());
+        }
+
+        // Global refresh shortcut (F5 or Ctrl+R)
+        if key.code == KeyCode::F(5)
+            || (key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL))
+        {
+            self.refresh_all_data();
             return Ok(());
         }
 

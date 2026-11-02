@@ -169,11 +169,18 @@ pub fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &
         ])
     };
 
+    let (sync_text, sync_style) = if app.is_syncing_account {
+        (" | 🔄 Sincronizando...", theme.accent_style().add_modifier(Modifier::BOLD))
+    } else {
+        (" | F5: Recarregar", theme.muted_style())
+    };
+
     let system_line = Line::from(vec![
         Span::styled("● Daemon: ", theme.muted_style()),
         Span::styled("Ativo", theme.playing_indicator_style()),
         Span::styled(" | MPRIS2: ", theme.muted_style()),
         Span::styled("OK", theme.accent_style()),
+        Span::styled(sync_text, sync_style),
         Span::styled(" | ?: Ajuda", theme.muted_style()),
     ]);
 

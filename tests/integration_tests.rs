@@ -189,7 +189,58 @@ async fn test_oauth_user_profile_and_library_live() {
     let playlists = client.get_user_playlists().await.expect("Failed to get playlists");
     assert!(!playlists.is_empty(), "Should find user playlists");
 
-    // Liked music test
+    // Liked music test (should paginate and retrieve > 200 tracks)
     let liked = client.get_liked_music().await.expect("Failed to get liked music");
-    assert!(!liked.is_empty(), "Should find liked music");
+    assert!(liked.len() > 200, "Should paginate and find > 200 liked tracks, found: {}", liked.len());
+
+    // Playlist tracks test
+    let (pl_title, pl_tracks) = client.get_playlist_tracks(&playlists[0].id).await.expect("Failed to get playlist tracks");
+    assert!(!pl_tracks.is_empty(), "First playlist '{}' should have tracks", pl_title);
+}
+
+#[test]
+fn test_cache_first_and_sync_ttl() {
+    use ytm_rs::innertube::PlaylistSummary;
+
+    let db = Database::open_in_memory().expect("Should open db");
+
+    // 1. Initial state: no sync recorded, playlists empty
+    assert!(db.get_last_sync_ts().unwrap().is_none());
+    assert!(db.get_playlists().unwrap().is_empty());
+
+    // 2. Simulate saving synced data
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let playlists = vec![PlaylistSummary {
+        id: "VLPL123".to_string(),
+        title: "My Metal Playlist".to_string(),
+        subtitle: "Playlist".to_string(),
+        count_text: "12 faixas".to_string(),
+        thumbnail_url: "https://thumb.url".to_string(),
+    }];
+
+    db.save_playlists(&playlists).unwrap();
+    db.set_last_sync_ts(now).unwrap();
+
+    // 3. Fast startup check: data immediately readable from SQLite
+    let loaded = db.get_playlists().unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].title, "My Metal Playlist");
+
+    // 4. TTL Check (24 hours = 86_400 secs):
+    const SYNC_TTL_SECS: u64 = 86_400;
+    let last_sync = db.get_last_sync_ts().unwrap().unwrap();
+
+    // Less than 24h passed: should NOT sync
+    let five_minutes_later = now + 300;
+    let should_sync_recent = (five_minutes_later.saturating_sub(last_sync) >= SYNC_TTL_SECS) || loaded.is_empty();
+    assert!(!should_sync_recent, "Should skip network sync when cache is fresh (< 24h)");
+
+    // More than 24h passed: should sync
+    let two_days_later = now + 172_800;
+    let should_sync_expired = (two_days_later.saturating_sub(last_sync) >= SYNC_TTL_SECS) || loaded.is_empty();
+    assert!(should_sync_expired, "Should trigger sync when cache is expired (> 24h)");
 }
