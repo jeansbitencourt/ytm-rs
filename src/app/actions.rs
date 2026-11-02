@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::info;
 
@@ -67,8 +68,41 @@ impl App {
                 profile,
                 liked_tracks,
                 playlists,
+                updated_auth: Some(client.auth),
             });
         });
+    }
+
+    pub fn refresh_all_data(&mut self) {
+        if !self.auth.is_authenticated() {
+            return;
+        }
+
+        self.spawn_account_sync();
+
+        // If currently viewing a user playlist, also force refresh its tracks
+        if let SidebarEntry::Playlist(pl_idx) = self.active_sidebar_entry {
+            if let Some(pl) = self.user_playlists.get(pl_idx).cloned() {
+                self.is_loading_tracks = true;
+                self.current_loading_playlist_id = Some(pl.id.clone());
+
+                let mut client = self.client.clone();
+                let pl_id = pl.id.clone();
+                let auth_file = self.config.auth_file.clone();
+                let tx = self.playlist_load_tx.clone();
+
+                tokio::spawn(async move {
+                    let _ = client.ensure_valid_token(Some(&auth_file)).await;
+                    let (title, tracks) = client.get_playlist_tracks(&pl_id).await.unwrap_or_else(|_| (pl.title.clone(), Vec::new()));
+                    let _ = tx.send(super::PlaylistLoadResult {
+                        playlist_id: pl_id,
+                        title,
+                        tracks,
+                        updated_auth: Some(client.auth),
+                    });
+                });
+            }
+        }
     }
 
     pub fn start_oauth_flow(&mut self) {
@@ -177,6 +211,11 @@ impl App {
         while let Ok(res) = self.account_sync_rx.try_recv() {
             self.is_syncing_account = false;
 
+            if let Some(auth) = res.updated_auth {
+                self.auth = auth.clone();
+                self.client.auth = auth;
+            }
+
             if let Some(prof) = res.profile {
                 self.account_sync_error = None;
                 if !prof.avatar_url.is_empty() {
@@ -185,21 +224,33 @@ impl App {
                         self.download_avatar(prof.avatar_url.clone());
                     }
                 }
+                let db_clone = Arc::clone(&self.db);
+                let p = prof.clone();
+                tokio::spawn(async move {
+                    let db = db_clone.lock().await;
+                    let _ = db.save_user_profile(&p);
+                });
                 self.user_profile = Some(prof);
             } else {
                 self.account_sync_error = Some("Sessão ou cookie expirado no Google".to_string());
             }
 
-            self.user_playlists = res.playlists;
+            self.user_playlists = res.playlists.clone();
+            {
+                let db_clone = Arc::clone(&self.db);
+                let pl_save = res.playlists.clone();
+                tokio::spawn(async move {
+                    let db = db_clone.lock().await;
+                    let _ = db.save_playlists(&pl_save);
+                });
+            }
 
             if !res.liked_tracks.is_empty() {
                 let db_clone = Arc::clone(&self.db);
                 let remote_liked = res.liked_tracks.clone();
                 tokio::spawn(async move {
                     let db = db_clone.lock().await;
-                    for t in &remote_liked {
-                        let _ = db.add_liked_track(t);
-                    }
+                    let _ = db.save_liked_tracks(&remote_liked);
                 });
 
                 self.liked_tracks = res.liked_tracks.clone();
@@ -210,11 +261,60 @@ impl App {
                     self.displayed_tracks = self.liked_tracks.clone();
                 }
             }
+
+            // Record last sync timestamp
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let db_clone = Arc::clone(&self.db);
+            tokio::spawn(async move {
+                let db = db_clone.lock().await;
+                let _ = db.set_last_sync_ts(now);
+            });
+        }
+    }
+
+    pub fn poll_playlist_load(&mut self) {
+        while let Ok(res) = self.playlist_load_rx.try_recv() {
+            if let Some(auth) = res.updated_auth {
+                self.auth = auth.clone();
+                self.client.auth = auth;
+            }
+
+            if !res.tracks.is_empty() {
+                let db_clone = Arc::clone(&self.db);
+                let pl_id = res.playlist_id.clone();
+                let tracks_save = res.tracks.clone();
+                tokio::spawn(async move {
+                    let db = db_clone.lock().await;
+                    let _ = db.save_playlist_tracks(&pl_id, &tracks_save);
+                });
+            }
+
+            if self.current_loading_playlist_id.as_deref() == Some(&res.playlist_id) {
+                self.is_loading_tracks = false;
+                let mut tracks = res.tracks;
+                let liked_ids: HashSet<&str> = self.liked_tracks.iter().map(|t| t.video_id.as_str()).collect();
+                for t in &mut tracks {
+                    if liked_ids.contains(t.video_id.as_str()) {
+                        t.is_liked = true;
+                    }
+                }
+                self.displayed_tracks = tracks;
+                if !res.title.is_empty() {
+                    self.active_category_title = format!("Playlist: \"{}\"", res.title);
+                }
+                self.tracklist_state.select(Some(0));
+            }
         }
     }
 
     pub async fn select_sidebar_index(&mut self, idx: usize) {
         self.sidebar_state.select(Some(idx));
+        self.current_loading_playlist_id = None;
+        self.is_loading_tracks = false;
+
         if idx == 0 {
             self.active_sidebar_entry = SidebarEntry::Fixed(SidebarItem::LikedTracks);
             self.content_view = ContentView::Tracks;
@@ -222,6 +322,7 @@ impl App {
             self.displayed_tracks = self.liked_tracks.clone();
             self.active_category_title = "Músicas Curtidas".to_string();
             self.tracklist_state.select(Some(0));
+            *self.tracklist_state.offset_mut() = 0;
         } else if idx == 1 {
             self.active_sidebar_entry = SidebarEntry::Fixed(SidebarItem::History);
             self.content_view = ContentView::Tracks;
@@ -229,6 +330,7 @@ impl App {
             self.displayed_tracks = self.history_tracks.clone();
             self.active_category_title = "Histórico Recente".to_string();
             self.tracklist_state.select(Some(0));
+            *self.tracklist_state.offset_mut() = 0;
         } else if idx == 2 {
             self.active_sidebar_entry = SidebarEntry::Fixed(SidebarItem::CurrentQueue);
             self.content_view = ContentView::Tracks;
@@ -245,15 +347,45 @@ impl App {
                 self.previous_view = None;
                 self.active_category_title = format!("Playlist: \"{}\"", pl.title);
                 self.tracklist_state.select(Some(0));
+                *self.tracklist_state.offset_mut() = 0;
 
-                let client = self.client.clone();
-                let pl_id = pl.id.clone();
-                if let Ok((title, tracks)) = client.get_playlist_tracks(&pl_id).await {
-                    if !tracks.is_empty() {
-                        self.displayed_tracks = tracks;
-                        self.active_category_title = format!("Playlist: \"{}\"", title);
-                        self.tracklist_state.select(Some(0));
+                // Check local SQLite cache first
+                let cached_tracks = {
+                    let db = self.db.lock().await;
+                    db.get_playlist_tracks(&pl.id).unwrap_or_default()
+                };
+
+                if !cached_tracks.is_empty() {
+                    let mut tracks = cached_tracks;
+                    let liked_ids: HashSet<&str> = self.liked_tracks.iter().map(|t| t.video_id.as_str()).collect();
+                    for t in &mut tracks {
+                        if liked_ids.contains(t.video_id.as_str()) {
+                            t.is_liked = true;
+                        }
                     }
+                    self.displayed_tracks = tracks;
+                    self.is_loading_tracks = false;
+                    self.current_loading_playlist_id = None;
+                } else {
+                    self.displayed_tracks.clear();
+                    self.is_loading_tracks = true;
+                    self.current_loading_playlist_id = Some(pl.id.clone());
+
+                    let mut client = self.client.clone();
+                    let pl_id = pl.id.clone();
+                    let auth_file = self.config.auth_file.clone();
+                    let tx = self.playlist_load_tx.clone();
+
+                    tokio::spawn(async move {
+                        let _ = client.ensure_valid_token(Some(&auth_file)).await;
+                        let (title, tracks) = client.get_playlist_tracks(&pl_id).await.unwrap_or_else(|_| (pl.title.clone(), Vec::new()));
+                        let _ = tx.send(super::PlaylistLoadResult {
+                            playlist_id: pl_id,
+                            title,
+                            tracks,
+                            updated_auth: Some(client.auth),
+                        });
+                    });
                 }
             }
         }

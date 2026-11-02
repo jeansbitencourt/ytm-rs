@@ -87,6 +87,23 @@ impl App {
                 return Ok(());
             }
 
+            // Clicking on sidebar items
+            if self.sidebar_area.width > 0
+                && mouse.column >= self.sidebar_area.left()
+                && mouse.column < self.sidebar_area.right()
+                && mouse.row > self.sidebar_area.top()
+                && mouse.row < self.sidebar_area.bottom()
+            {
+                self.active_panel = ActivePanel::Sidebar;
+                let rel_y = mouse.row.saturating_sub(self.sidebar_area.top() + 1);
+                let total_items = 3 + self.user_playlists.len();
+                let clicked_idx = self.sidebar_state.offset() + rel_y as usize;
+                if clicked_idx < total_items {
+                    self.select_sidebar_index(clicked_idx).await;
+                }
+                return Ok(());
+            }
+
             // Clicking on tracklist / album / artist card
             if self.tracklist_area.width > 0
                 && mouse.column >= self.tracklist_area.left()
@@ -144,6 +161,19 @@ impl App {
                 return Ok(());
             }
         } else if mouse.kind == MouseEventKind::ScrollUp {
+            if self.sidebar_area.width > 0
+                && mouse.column >= self.sidebar_area.left()
+                && mouse.column < self.sidebar_area.right()
+                && mouse.row >= self.sidebar_area.top()
+                && mouse.row <= self.sidebar_area.bottom()
+            {
+                let cur = self.sidebar_state.selected().unwrap_or(0);
+                if cur > 0 {
+                    self.select_sidebar_index(cur - 1).await;
+                }
+                return Ok(());
+            }
+
             match self.content_view {
                 ContentView::Tracks => {
                     let cur = self.tracklist_state.selected().unwrap_or(0);
@@ -165,6 +195,20 @@ impl App {
                 }
             }
         } else if mouse.kind == MouseEventKind::ScrollDown {
+            if self.sidebar_area.width > 0
+                && mouse.column >= self.sidebar_area.left()
+                && mouse.column < self.sidebar_area.right()
+                && mouse.row >= self.sidebar_area.top()
+                && mouse.row <= self.sidebar_area.bottom()
+            {
+                let total_items = 3 + self.user_playlists.len();
+                let cur = self.sidebar_state.selected().unwrap_or(0);
+                if cur + 1 < total_items {
+                    self.select_sidebar_index(cur + 1).await;
+                }
+                return Ok(());
+            }
+
             match self.content_view {
                 ContentView::Tracks => {
                     if !self.displayed_tracks.is_empty() {

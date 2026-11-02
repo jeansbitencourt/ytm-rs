@@ -85,34 +85,61 @@ impl App {
         // 3. Determine items to prefetch depending on content_view
         let items_to_fetch: Vec<(String, String)> = match self.content_view {
             ContentView::Tracks => {
-                let offset = self.tracklist_state.offset();
-                let start = offset.saturating_sub(1);
-                let end = (offset + 25).min(self.displayed_tracks.len());
-                self.displayed_tracks[start..end]
-                    .iter()
-                    .filter(|t| !t.thumbnail_url.is_empty())
-                    .map(|t| (t.video_id.clone(), t.thumbnail_url.clone()))
-                    .collect()
+                let len = self.displayed_tracks.len();
+                if len == 0 {
+                    Vec::new()
+                } else {
+                    let offset = self.tracklist_state.offset().min(len.saturating_sub(1));
+                    let start = offset.saturating_sub(1);
+                    let end = (offset + 25).min(len);
+                    if start < end && start < len {
+                        self.displayed_tracks[start..end]
+                            .iter()
+                            .filter(|t| !t.thumbnail_url.is_empty())
+                            .map(|t| (t.video_id.clone(), t.thumbnail_url.clone()))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                }
             }
             ContentView::Albums => {
-                let offset = self.album_table_state.offset();
-                let start = offset.saturating_sub(1);
-                let end = (offset + 25).min(self.search_results_albums.len());
-                self.search_results_albums[start..end]
-                    .iter()
-                    .filter(|a| !a.thumbnail_url.is_empty())
-                    .map(|a| (a.browse_id.clone(), a.thumbnail_url.clone()))
-                    .collect()
+                let len = self.search_results_albums.len();
+                if len == 0 {
+                    Vec::new()
+                } else {
+                    let offset = self.album_table_state.offset().min(len.saturating_sub(1));
+                    let start = offset.saturating_sub(1);
+                    let end = (offset + 25).min(len);
+                    if start < end && start < len {
+                        self.search_results_albums[start..end]
+                            .iter()
+                            .filter(|a| !a.thumbnail_url.is_empty())
+                            .map(|a| (a.browse_id.clone(), a.thumbnail_url.clone()))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                }
             }
             ContentView::Artists => {
-                let offset = self.artist_table_state.offset();
-                let start = offset.saturating_sub(1);
-                let end = (offset + 25).min(self.search_results_artists.len());
-                self.search_results_artists[start..end]
-                    .iter()
-                    .filter(|a| !a.thumbnail_url.is_empty())
-                    .map(|a| (a.browse_id.clone(), a.thumbnail_url.clone()))
-                    .collect()
+                let len = self.search_results_artists.len();
+                if len == 0 {
+                    Vec::new()
+                } else {
+                    let offset = self.artist_table_state.offset().min(len.saturating_sub(1));
+                    let start = offset.saturating_sub(1);
+                    let end = (offset + 25).min(len);
+                    if start < end && start < len {
+                        self.search_results_artists[start..end]
+                            .iter()
+                            .filter(|a| !a.thumbnail_url.is_empty())
+                            .map(|a| (a.browse_id.clone(), a.thumbnail_url.clone()))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                }
             }
         };
 
@@ -156,6 +183,11 @@ impl App {
 
     pub fn update_avatar_if_needed(&mut self) {
         while let Ok(img) = self.avatar_rx.try_recv() {
+            let avatar_path = self.config.cache_dir.join("avatar.png");
+            let img_to_save = img.clone();
+            tokio::spawn(async move {
+                let _ = img_to_save.save(&avatar_path);
+            });
             self.current_avatar_image = Some(img.clone());
             self.avatar_protocol = Some(self.picker.new_resize_protocol(img));
         }
@@ -224,4 +256,43 @@ pub fn detect_terminal_font_size() -> (u16, u16) {
     }
 
     (7, 16)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+    use crate::innertube::Track;
+
+    #[tokio::test]
+    async fn test_update_thumbnails_safe_when_offset_exceeds_len() {
+        let config = AppConfig::load().unwrap();
+        let mut app = App::new(config).await.unwrap();
+
+        // 1. Tracks view with offset larger than empty list
+        app.content_view = ContentView::Tracks;
+        app.displayed_tracks.clear();
+        *app.tracklist_state.offset_mut() = 50;
+        app.update_thumbnails_if_needed(); // Must not panic!
+
+        // 2. Tracks view with offset larger than non-empty short list
+        app.displayed_tracks = vec![
+            Track::new("id1", "Title 1", "Artist", "Album", 180, "https://thumb1.jpg"),
+            Track::new("id2", "Title 2", "Artist", "Album", 200, "https://thumb2.jpg"),
+        ];
+        *app.tracklist_state.offset_mut() = 50;
+        app.update_thumbnails_if_needed(); // Must not panic!
+
+        // 3. Albums view with offset larger than empty list
+        app.content_view = ContentView::Albums;
+        app.search_results_albums.clear();
+        *app.album_table_state.offset_mut() = 100;
+        app.update_thumbnails_if_needed(); // Must not panic!
+
+        // 4. Artists view with offset larger than empty list
+        app.content_view = ContentView::Artists;
+        app.search_results_artists.clear();
+        *app.artist_table_state.offset_mut() = 100;
+        app.update_thumbnails_if_needed(); // Must not panic!
+    }
 }

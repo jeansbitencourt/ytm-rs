@@ -203,8 +203,10 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
             Span::styled("Pressione [o] para Login Google ou cole o cookie aqui... █", theme.muted_style())
         }
     } else {
-        let masked = if app.auth_input.len() > 46 {
-            format!("{}... ({} caracteres) █", &app.auth_input[..36], app.auth_input.len())
+        let char_count = app.auth_input.chars().count();
+        let masked = if char_count > 46 {
+            let prefix: String = app.auth_input.chars().take(36).collect();
+            format!("{}... ({} caracteres) █", prefix, char_count)
         } else {
             format!("{} █", app.auth_input)
         };

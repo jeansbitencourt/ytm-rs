@@ -620,6 +620,7 @@ async fn run_tui(config: AppConfig) -> Result<()> {
 
         // Update cover art, thumbnail, avatar and account sync if needed
         app.poll_account_sync().await;
+        app.poll_playlist_load();
         app.poll_oauth_progress().await;
         app.update_cover_if_needed();
         app.update_thumbnails_if_needed();

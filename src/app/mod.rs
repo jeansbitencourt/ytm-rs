@@ -42,6 +42,14 @@ pub struct AccountSyncResult {
     pub profile: Option<UserProfile>,
     pub liked_tracks: Vec<Track>,
     pub playlists: Vec<PlaylistSummary>,
+    pub updated_auth: Option<crate::innertube::auth::AuthConfig>,
+}
+
+pub struct PlaylistLoadResult {
+    pub playlist_id: String,
+    pub title: String,
+    pub tracks: Vec<Track>,
+    pub updated_auth: Option<crate::innertube::auth::AuthConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +98,11 @@ pub struct App {
     pub playerbar_area: Rect,
     pub header_search_area: Rect,
     pub tracklist_area: Rect,
+    pub sidebar_area: Rect,
+    pub is_loading_tracks: bool,
+    pub current_loading_playlist_id: Option<String>,
+    pub playlist_load_tx: UnboundedSender<PlaylistLoadResult>,
+    pub playlist_load_rx: UnboundedReceiver<PlaylistLoadResult>,
     pub client: InnertubeClient,
     pub auth: crate::innertube::auth::AuthConfig,
     pub db: Arc<Mutex<Database>>,
@@ -132,12 +145,24 @@ impl App {
         let mut artist_table_state = ListState::default();
         artist_table_state.select(Some(0));
 
-        let (liked, history) = {
+        let (liked, history, user_playlists, user_profile, last_sync_ts) = {
             let db_guard = db.lock().await;
             (
                 db_guard.get_liked_tracks().unwrap_or_default(),
                 db_guard.get_history(50).unwrap_or_default(),
+                db_guard.get_playlists().unwrap_or_default(),
+                db_guard.get_user_profile().unwrap_or_default(),
+                db_guard.get_last_sync_ts().unwrap_or_default(),
             )
+        };
+
+        let cached_avatar = {
+            let avatar_path = config.cache_dir.join("avatar.png");
+            if avatar_path.exists() {
+                image::open(&avatar_path).ok()
+            } else {
+                None
+            }
         };
 
         let player_state = match send_daemon_command(&config, DaemonCommand::GetState).await {
@@ -183,11 +208,16 @@ impl App {
         picker.font_size = font_size;
         picker.guess_protocol();
 
+        let avatar_protocol = cached_avatar
+            .as_ref()
+            .map(|img| picker.new_resize_protocol(img.clone()));
+
         let (cover_tx, cover_rx) = unbounded_channel();
         let (thumb_tx, thumb_rx) = unbounded_channel();
         let (avatar_tx, avatar_rx) = unbounded_channel();
         let (account_sync_tx, account_sync_rx) = unbounded_channel();
         let (oauth_tx, oauth_rx) = unbounded_channel();
+        let (playlist_load_tx, playlist_load_rx) = unbounded_channel();
 
         let mut app = Self {
             config,
@@ -204,8 +234,8 @@ impl App {
             displayed_tracks,
             liked_tracks: liked,
             history_tracks: history,
-            user_playlists: Vec::new(),
-            user_profile: None,
+            user_playlists,
+            user_profile,
             is_syncing_account: false,
             account_sync_error: None,
             search_input: String::new(),
@@ -228,6 +258,11 @@ impl App {
             playerbar_area: Rect::default(),
             header_search_area: Rect::default(),
             tracklist_area: Rect::default(),
+            sidebar_area: Rect::default(),
+            is_loading_tracks: false,
+            current_loading_playlist_id: None,
+            playlist_load_tx,
+            playlist_load_rx,
             client,
             auth,
             db,
@@ -241,16 +276,30 @@ impl App {
             thumb_loading: HashSet::new(),
             thumb_tx,
             thumb_rx,
-            avatar_protocol: None,
-            current_avatar_image: None,
+            avatar_protocol,
+            current_avatar_image: cached_avatar,
             avatar_tx,
             avatar_rx,
             account_sync_tx,
             account_sync_rx,
         };
 
-        // Dispara a sincronização de conta em background se autenticado
-        app.spawn_account_sync();
+        // Dispara a sincronização de conta em background se autenticado e se TTL de 24h expirou
+        // ou se ainda não temos playlists no cache
+        const SYNC_TTL_SECS: u64 = 86_400; // 24 horas
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let should_sync = match last_sync_ts {
+            Some(ts) => (now_ts.saturating_sub(ts) >= SYNC_TTL_SECS) || app.user_playlists.is_empty(),
+            None => true,
+        };
+
+        if should_sync {
+            app.spawn_account_sync();
+        }
 
         Ok(app)
     }

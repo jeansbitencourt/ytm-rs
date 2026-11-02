@@ -51,6 +51,8 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(content_chunks[0]);
 
+    app.sidebar_area = sidebar_chunks[0];
+
     let counts = (
         app.liked_tracks.len(),
         app.history_tracks.len(),
@@ -95,6 +97,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 &mut app.tracklist_state,
                 is_tracklist_focused,
                 &mut app.thumb_protocols,
+                app.is_loading_tracks,
             );
         }
         ContentView::Albums => {

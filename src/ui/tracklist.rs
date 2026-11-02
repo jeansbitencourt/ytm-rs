@@ -35,6 +35,7 @@ pub fn render_tracklist(
     state: &mut ListState,
     is_focused: bool,
     thumb_protocols: &mut HashMap<String, Box<dyn StatefulProtocol>>,
+    is_loading: bool,
 ) {
     let border_style = if is_focused {
         theme.focused_border_style()
@@ -62,9 +63,14 @@ pub fn render_tracklist(
     }
 
     if tracks.is_empty() {
+        let msg = if is_loading {
+            "⏳ Carregando faixas da playlist..."
+        } else {
+            "Nenhuma música na lista."
+        };
         let empty_msg = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("Nenhuma música na lista.", theme.muted_style())),
+            Line::from(Span::styled(msg, theme.muted_style())),
         ])
         .alignment(Alignment::Center)
         .block(block);
@@ -112,8 +118,8 @@ pub fn render_tracklist(
             let dur_len = dur_str.chars().count();
             let dur_span = Span::styled(dur_str, theme.muted_style());
 
-            // Left layout: 1 space + 4 chars thumb + 1 space + 5 chars number = 11 chars
-            let left_w = 11;
+            let num_len = num_str.chars().count();
+            let left_w = 6 + num_len;
             let right_w = dur_len;
             let available_for_title = inner_w.saturating_sub(left_w + right_w + like_w);
 
@@ -167,9 +173,10 @@ pub fn render_tracklist(
                 Span::styled(" [  ] ", theme.muted_style())
             };
 
+            let num_pad = " ".repeat(num_len);
             let line2 = Line::from(vec![
                 thumb_span_bottom,
-                Span::raw("     "),
+                Span::raw(num_pad),
                 Span::styled(disp_sub, sub_style),
                 Span::raw(pad_sub),
                 Span::raw(" "),
