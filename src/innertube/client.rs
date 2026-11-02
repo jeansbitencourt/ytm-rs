@@ -168,6 +168,38 @@ impl InnertubeClient {
         Ok(parse_radio_results(&body))
     }
 
+    pub async fn browse_continuation(&self, continuation: &str) -> Result<Value> {
+        let (url, payload, headers) = if self.auth.has_oauth() {
+            (
+                format!("{}/browse", YOUTUBE_BASE_URL),
+                json!({
+                    "context": Self::tv_context(),
+                    "continuation": continuation
+                }),
+                self.build_tv_headers(),
+            )
+        } else {
+            (
+                format!("{}/browse", INNERTUBE_BASE_URL),
+                json!({
+                    "context": Self::default_context(),
+                    "continuation": continuation
+                }),
+                self.build_web_headers(),
+            )
+        };
+
+        let resp = self.http.post(&url)
+            .headers(headers)
+            .json(&payload)
+            .send()
+            .await
+            .context("Failed to send continuation request to Innertube")?;
+
+        let body: Value = resp.json().await.context("Failed to parse continuation response JSON")?;
+        Ok(body)
+    }
+
     pub async fn get_liked_music(&self) -> Result<Vec<Track>> {
         let (url, payload, headers) = if self.auth.has_oauth() {
             (
@@ -197,7 +229,32 @@ impl InnertubeClient {
             .context("Failed to send browse request to Innertube")?;
 
         let body: Value = resp.json().await.context("Failed to parse browse response JSON")?;
-        Ok(parse_playlist_results(&body))
+        let mut tracks = parse_playlist_results(&body);
+        let mut continuation_token = extract_browse_continuation_token(&body);
+
+        let mut pages = 1;
+        while let Some(tok) = continuation_token {
+            if pages >= 30 {
+                break;
+            }
+            if let Ok(c_body) = self.browse_continuation(&tok).await {
+                let (c_tracks, next_tok) = parse_continuation_response(&c_body);
+                if c_tracks.is_empty() {
+                    break;
+                }
+                tracks.extend(c_tracks);
+                continuation_token = next_tok;
+                pages += 1;
+            } else {
+                break;
+            }
+        }
+
+        for t in &mut tracks {
+            t.is_liked = true;
+        }
+
+        Ok(tracks)
     }
 
     pub async fn like_track(&self, video_id: &str, like: bool) -> Result<()> {
@@ -507,6 +564,56 @@ impl InnertubeClient {
             .to_string();
 
         let tracks = parse_playlist_results(&body);
-        Ok((title, tracks))
+        let mut all_tracks = tracks;
+        let mut continuation_token = extract_browse_continuation_token(&body);
+
+        let mut pages = 1;
+        while let Some(tok) = continuation_token {
+            if pages >= 30 {
+                break;
+            }
+            if let Ok(c_body) = self.browse_continuation(&tok).await {
+                let (c_tracks, next_tok) = parse_continuation_response(&c_body);
+                if c_tracks.is_empty() {
+                    break;
+                }
+                all_tracks.extend(c_tracks);
+                continuation_token = next_tok;
+                pages += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Fallback for Web Remix if TVHTML5 returned 0 tracks
+        if all_tracks.is_empty() && self.auth.has_oauth() && self.auth.cookies.is_some() {
+            let web_url = format!("{}/browse", INNERTUBE_BASE_URL);
+            let web_payload = json!({
+                "context": Self::default_context(),
+                "browseId": clean_id
+            });
+            if let Ok(resp2) = self.http.post(&web_url).headers(self.build_web_headers()).json(&web_payload).send().await {
+                if let Ok(body2) = resp2.json::<Value>().await {
+                    let mut t2 = parse_playlist_results(&body2);
+                    if !t2.is_empty() {
+                        let mut cont2 = extract_browse_continuation_token(&body2);
+                        let mut p = 1;
+                        while let Some(tok2) = cont2 {
+                            if p >= 30 { break; }
+                            if let Ok(cb) = self.browse_continuation(&tok2).await {
+                                let (ct, nt) = parse_continuation_response(&cb);
+                                if ct.is_empty() { break; }
+                                t2.extend(ct);
+                                cont2 = nt;
+                                p += 1;
+                            } else { break; }
+                        }
+                        return Ok((title, t2));
+                    }
+                }
+            }
+        }
+
+        Ok((title, all_tracks))
     }
 }

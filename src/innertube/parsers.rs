@@ -306,6 +306,120 @@ pub fn parse_playlist_results(val: &Value) -> Vec<Track> {
     tracks
 }
 
+/// Extracts the next continuation token from an initial browse response
+pub fn extract_browse_continuation_token(val: &Value) -> Option<String> {
+    // 1. TVHTML5 Liked songs tab gridRenderer continuations
+    if let Some(tabs) = val
+        .pointer("/contents/tvBrowseRenderer/content/tvSecondaryNavRenderer/sections/0/tvSecondaryNavSectionRenderer/tabs")
+        .and_then(|v| v.as_array())
+    {
+        for tab in tabs {
+            let tr = tab.get("tabRenderer");
+            let is_selected = tr.and_then(|t| t.get("selected")).and_then(|s| s.as_bool()).unwrap_or(false);
+            let title = tr.and_then(|t| t.get("title")).and_then(|s| s.as_str()).unwrap_or("");
+            if is_selected || title.contains("Liked") || title.contains("Curtidas") {
+                if let Some(token) = tr.and_then(|t| t.pointer("/content/tvSurfaceContentRenderer/content/gridRenderer/continuations/0/nextContinuationData/continuation")).and_then(|v| v.as_str()) {
+                    return Some(token.to_string());
+                }
+            }
+        }
+    }
+
+    // 2. TVHTML5 Playlist detail list (right column)
+    if let Some(token) = val
+        .pointer("/contents/tvBrowseRenderer/content/tvSurfaceContentRenderer/content/twoColumnRenderer/rightColumn/playlistVideoListRenderer/continuations/0/nextContinuationData/continuation")
+        .and_then(|v| v.as_str())
+    {
+        return Some(token.to_string());
+    }
+
+    // 3. Web Remix formats
+    let token = val
+        .pointer("/contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer/contents/0/musicPlaylistShelfRenderer/continuations/0/nextContinuationData/continuation")
+        .or_else(|| val.pointer("/contents/twoColumnBrowseResultsRenderer/secondaryContents/sectionListRenderer/contents/0/musicPlaylistShelfRenderer/continuations/0/nextContinuationData/continuation"))
+        .or_else(|| val.pointer("/contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer/contents/0/musicShelfRenderer/continuations/0/nextContinuationData/continuation"))
+        .or_else(|| val.pointer("/contents/sectionListRenderer/continuations/0/nextContinuationData/continuation"))
+        .and_then(|v| v.as_str());
+
+    token.map(|s| s.to_string())
+}
+
+/// Parses tracks and the next continuation token from a continuation response
+pub fn parse_continuation_response(val: &Value) -> (Vec<Track>, Option<String>) {
+    let mut tracks = Vec::new();
+    let mut next_token = None;
+
+    // 1. TVHTML5 gridContinuation (Liked music)
+    if let Some(gc) = val.pointer("/continuationContents/gridContinuation") {
+        if let Some(items) = gc.get("items").and_then(|v| v.as_array()) {
+            for it in items {
+                if let Some(tile) = it.get("tileRenderer") {
+                    if let Some(track) = parse_tv_tile_track(tile) {
+                        tracks.push(track);
+                    }
+                }
+            }
+        }
+        if let Some(tok) = gc.pointer("/continuations/0/nextContinuationData/continuation").and_then(|v| v.as_str()) {
+            next_token = Some(tok.to_string());
+        }
+        return (tracks, next_token);
+    }
+
+    // 2. TVHTML5 playlistVideoListContinuation (Playlists)
+    if let Some(pvlc) = val.pointer("/continuationContents/playlistVideoListContinuation") {
+        if let Some(contents) = pvlc.get("contents").and_then(|v| v.as_array()) {
+            for it in contents {
+                if let Some(tile) = it.get("tileRenderer") {
+                    if let Some(track) = parse_tv_tile_track(tile) {
+                        tracks.push(track);
+                    }
+                }
+            }
+        }
+        if let Some(tok) = pvlc.pointer("/continuations/0/nextContinuationData/continuation").and_then(|v| v.as_str()) {
+            next_token = Some(tok.to_string());
+        }
+        return (tracks, next_token);
+    }
+
+    // 3. Web remix continuationContents (musicPlaylistShelfContinuation or musicShelfContinuation)
+    let shelf_cont = val.pointer("/continuationContents/musicPlaylistShelfContinuation")
+        .or_else(|| val.pointer("/continuationContents/musicShelfContinuation"))
+        .or_else(|| val.pointer("/continuationContents/sectionListContinuation"));
+
+    if let Some(sc) = shelf_cont {
+        if let Some(contents) = sc.get("contents").and_then(|v| v.as_array()) {
+            for item in contents {
+                if let Some(renderer) = item.get("musicResponsiveListItemRenderer") {
+                    if let Some(track) = parse_music_responsive_item(renderer) {
+                        tracks.push(track);
+                    }
+                }
+            }
+        }
+        if let Some(tok) = sc.pointer("/continuations/0/nextContinuationData/continuation").and_then(|v| v.as_str()) {
+            next_token = Some(tok.to_string());
+        }
+        return (tracks, next_token);
+    }
+
+    // 4. Web remix appendContinuationItemsAction
+    if let Some(items) = val.pointer("/onResponseReceivedActions/0/appendContinuationItemsAction/continuationItems").and_then(|v| v.as_array()) {
+        for item in items {
+            if let Some(renderer) = item.get("musicResponsiveListItemRenderer") {
+                if let Some(track) = parse_music_responsive_item(renderer) {
+                    tracks.push(track);
+                }
+            } else if let Some(tok) = item.pointer("/continuationItemRenderer/continuationEndpoint/continuationCommand/token").and_then(|v| v.as_str()) {
+                next_token = Some(tok.to_string());
+            }
+        }
+    }
+
+    (tracks, next_token)
+}
+
 pub fn parse_album_search_results(val: &Value) -> Vec<AlbumSummary> {
     let mut albums = Vec::new();
     let items = val
@@ -1421,5 +1535,79 @@ mod tests {
         assert_eq!(track.album, "");
         assert_eq!(track.duration_secs, 347);
         assert_eq!(track.duration_text, "05:47");
+    }
+
+    #[test]
+    fn test_extract_and_parse_continuations() {
+        let raw_browse = json!({
+            "contents": {
+                "tvBrowseRenderer": {
+                    "content": {
+                        "tvSurfaceContentRenderer": {
+                            "content": {
+                                "twoColumnRenderer": {
+                                    "rightColumn": {
+                                        "playlistVideoListRenderer": {
+                                            "contents": [],
+                                            "continuations": [
+                                                {
+                                                    "nextContinuationData": {
+                                                        "continuation": "token_page_2"
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        assert_eq!(extract_browse_continuation_token(&raw_browse), Some("token_page_2".to_string()));
+
+        let raw_continuation = json!({
+            "continuationContents": {
+                "playlistVideoListContinuation": {
+                    "contents": [
+                        {
+                            "tileRenderer": {
+                                "contentId": "track_cont_1",
+                                "metadata": {
+                                    "tileMetadataRenderer": {
+                                        "title": { "simpleText": "Aces High" },
+                                        "lines": [
+                                            {
+                                                "lineRenderer": {
+                                                    "items": [
+                                                        { "lineItemRenderer": { "text": { "simpleText": "Iron Maiden" } } }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "continuations": [
+                        {
+                            "nextContinuationData": {
+                                "continuation": "token_page_3"
+                            }
+                        }
+                    ]
+                }
+            }
+        });
+
+        let (tracks, next_tok) = parse_continuation_response(&raw_continuation);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].video_id, "track_cont_1");
+        assert_eq!(tracks[0].title, "Aces High");
+        assert_eq!(tracks[0].artist, "Iron Maiden");
+        assert_eq!(next_tok, Some("token_page_3".to_string()));
     }
 }
