@@ -251,12 +251,22 @@ impl App {
                             KeyCode::Enter => {
                                 if let Some(idx) = self.tracklist_state.selected() {
                                     if idx < self.displayed_tracks.len() {
-                                        let tracks = self.displayed_tracks.clone();
-                                        let _ = send_daemon_command(
-                                            &self.config,
-                                            DaemonCommand::QueueTracks(tracks, idx),
-                                        )
-                                        .await;
+                                        let now = std::time::Instant::now();
+                                        let should_trigger = match self.last_track_click {
+                                            Some((prev_idx, prev_time)) if prev_idx == idx => {
+                                                now.duration_since(prev_time).as_millis() > 500
+                                            }
+                                            _ => true,
+                                        };
+                                        if should_trigger {
+                                            self.last_track_click = Some((idx, now));
+                                            let tracks = self.displayed_tracks.clone();
+                                            let _ = send_daemon_command(
+                                                &self.config,
+                                                DaemonCommand::QueueTracks(tracks, idx),
+                                            )
+                                            .await;
+                                        }
                                     }
                                 }
                             }

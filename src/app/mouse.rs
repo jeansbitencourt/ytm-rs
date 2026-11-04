@@ -123,12 +123,23 @@ impl App {
                                 let was_selected = self.tracklist_state.selected() == Some(card_idx);
                                 self.tracklist_state.select(Some(card_idx));
                                 if was_selected {
-                                    let tracks = self.displayed_tracks.clone();
-                                    let _ = send_daemon_command(
-                                        &self.config,
-                                        DaemonCommand::QueueTracks(tracks, card_idx),
-                                    )
-                                    .await;
+                                    let now = std::time::Instant::now();
+                                    let should_trigger = match self.last_track_click {
+                                        Some((prev_idx, prev_time)) if prev_idx == card_idx => {
+                                            now.duration_since(prev_time).as_millis() > 500
+                                        }
+                                        _ => true,
+                                    };
+
+                                    if should_trigger {
+                                        self.last_track_click = Some((card_idx, now));
+                                        let tracks = self.displayed_tracks.clone();
+                                        let _ = send_daemon_command(
+                                            &self.config,
+                                            DaemonCommand::QueueTracks(tracks, card_idx),
+                                        )
+                                        .await;
+                                    }
                                 }
                             }
                         }

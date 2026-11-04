@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc, Mutex};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::cache::Database;
 use crate::config::AppConfig;
@@ -21,6 +21,7 @@ pub struct AudioDaemon {
     mpv_tx: mpsc::Sender<MpvCommand>,
     prefetch_triggered: Arc<Mutex<bool>>,
     tui_clients: Arc<Mutex<usize>>,
+    play_generation: Arc<Mutex<u64>>,
 }
 
 impl AudioDaemon {
@@ -53,6 +54,7 @@ impl AudioDaemon {
                 mpv_tx: mpv_cmd_tx,
                 prefetch_triggered: Arc::new(Mutex::new(false)),
                 tui_clients: Arc::new(Mutex::new(0)),
+                play_generation: Arc::new(Mutex::new(0)),
             },
             mpv_event_rx,
         ))
@@ -147,7 +149,7 @@ impl AudioDaemon {
         }
     }
 
-    async fn handle_mpv_event(&self, event: MpvEvent) {
+    async fn handle_mpv_event(self: &Arc<Self>, event: MpvEvent) {
         let mut state = self.state.lock().await;
         match event {
             MpvEvent::TimePos(pos) => {
@@ -173,12 +175,37 @@ impl AudioDaemon {
             }
             MpvEvent::Pause(is_paused) => {
                 if state.current_track.is_some() {
-                    state.status = if is_paused {
-                        PlaybackStatus::Paused
+                    if state.status == PlaybackStatus::Buffering {
+                        if !is_paused {
+                            state.status = PlaybackStatus::Playing;
+                        }
                     } else {
-                        PlaybackStatus::Playing
-                    };
+                        state.status = if is_paused {
+                            PlaybackStatus::Paused
+                        } else {
+                            PlaybackStatus::Playing
+                        };
+                    }
                 }
+            }
+            MpvEvent::FileLoaded => {
+                if state.current_track.is_some() {
+                    state.status = PlaybackStatus::Playing;
+                    let _ = self.mpv_tx.send(MpvCommand::SetPause(false)).await;
+                }
+            }
+            MpvEvent::FileError => {
+                let cur = state.current_track.clone();
+                drop(state);
+                if let Some(track) = cur {
+                    warn!("MPV reported file error loading {}. Invalidating cache and retrying.", track.video_id);
+                    {
+                        let db = self.db.lock().await;
+                        let _ = db.remove_stream_url(&track.video_id);
+                    }
+                    self.play_track(track).await;
+                }
+                return;
             }
             MpvEvent::Eof => {
                 drop(state);
@@ -193,7 +220,13 @@ impl AudioDaemon {
         self.write_status_json().await;
     }
 
-    pub async fn play_track(&self, track: Track) {
+    pub async fn play_track(self: &Arc<Self>, track: Track) {
+        let my_gen = {
+            let mut gen = self.play_generation.lock().await;
+            *gen = gen.wrapping_add(1);
+            *gen
+        };
+
         {
             let mut state = self.state.lock().await;
             state.status = PlaybackStatus::Buffering;
@@ -208,26 +241,41 @@ impl AudioDaemon {
         *self.prefetch_triggered.lock().await = false;
         self.broadcast_and_save().await;
 
-        let db = Arc::clone(&self.db);
+        let daemon = Arc::clone(self);
         let video_id = track.video_id.clone();
-        let mpv_tx = self.mpv_tx.clone();
 
-        match resolve_stream_url(&video_id, &db).await {
-            Ok(url) => {
-                let _ = mpv_tx.send(MpvCommand::LoadFile(url)).await;
-                let mut state = self.state.lock().await;
-                state.status = PlaybackStatus::Playing;
+        tokio::spawn(async move {
+            let db = Arc::clone(&daemon.db);
+            match resolve_stream_url(&video_id, &db).await {
+                Ok(url) => {
+                    let current_gen = *daemon.play_generation.lock().await;
+                    if current_gen != my_gen {
+                        debug!("Stream URL resolved for {} but discarded due to generation mismatch ({} vs {})", video_id, current_gen, my_gen);
+                        return;
+                    }
+
+                    let _ = daemon.mpv_tx.send(MpvCommand::LoadFile(url)).await;
+                    let mut state = daemon.state.lock().await;
+                    state.status = PlaybackStatus::Playing;
+                    drop(state);
+                    daemon.broadcast_and_save().await;
+                }
+                Err(e) => {
+                    let current_gen = *daemon.play_generation.lock().await;
+                    if current_gen != my_gen {
+                        return;
+                    }
+                    error!("Failed to resolve stream URL for {}: {}", video_id, e);
+                    let mut state = daemon.state.lock().await;
+                    state.status = PlaybackStatus::Stopped;
+                    drop(state);
+                    daemon.broadcast_and_save().await;
+                }
             }
-            Err(e) => {
-                error!("Failed to resolve stream URL for {}: {}", video_id, e);
-                let mut state = self.state.lock().await;
-                state.status = PlaybackStatus::Stopped;
-            }
-        }
-        self.broadcast_and_save().await;
+        });
     }
 
-    pub async fn queue_tracks(&self, tracks: Vec<Track>, start_idx: usize) {
+    pub async fn queue_tracks(self: &Arc<Self>, tracks: Vec<Track>, start_idx: usize) {
         if tracks.is_empty() {
             return;
         }
@@ -243,7 +291,7 @@ impl AudioDaemon {
         }
     }
 
-    pub async fn enqueue_track(&self, track: Track) {
+    pub async fn enqueue_track(self: &Arc<Self>, track: Track) {
         let should_play = {
             let mut state = self.state.lock().await;
             state.queue.push(track.clone());
@@ -265,7 +313,7 @@ impl AudioDaemon {
         }
     }
 
-    pub async fn next_track(&self) {
+    pub async fn next_track(self: &Arc<Self>) {
         let next_track = {
             let mut state = self.state.lock().await;
             if state.queue.is_empty() {
@@ -287,7 +335,7 @@ impl AudioDaemon {
         }
     }
 
-    pub async fn prev_track(&self) {
+    pub async fn prev_track(self: &Arc<Self>) {
         let prev_track = {
             let mut state = self.state.lock().await;
             if state.queue.is_empty() {
@@ -308,7 +356,7 @@ impl AudioDaemon {
         }
     }
 
-    pub async fn toggle(&self) {
+    pub async fn toggle(self: &Arc<Self>) {
         let mut state = self.state.lock().await;
         match state.status {
             PlaybackStatus::Playing => {

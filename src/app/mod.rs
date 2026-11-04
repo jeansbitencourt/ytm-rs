@@ -122,6 +122,7 @@ pub struct App {
     pub avatar_rx: UnboundedReceiver<image::DynamicImage>,
     pub account_sync_tx: UnboundedSender<AccountSyncResult>,
     pub account_sync_rx: UnboundedReceiver<AccountSyncResult>,
+    pub last_track_click: Option<(usize, std::time::Instant)>,
 }
 
 impl App {
@@ -282,6 +283,7 @@ impl App {
             avatar_rx,
             account_sync_tx,
             account_sync_rx,
+            last_track_click: None,
         };
 
         // Dispara a sincronização de conta em background se autenticado e se TTL de 24h expirou

@@ -265,6 +265,14 @@ impl Database {
         }
     }
 
+    pub fn remove_stream_url(&self, video_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM stream_cache WHERE video_id = ?1",
+            params![video_id],
+        )?;
+        Ok(())
+    }
+
     pub fn save_liked_tracks(&self, tracks: &[Track]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM liked_tracks", [])?;

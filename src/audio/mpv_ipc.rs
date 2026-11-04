@@ -23,6 +23,8 @@ pub enum MpvEvent {
     TimePos(f64),
     Duration(f64),
     Pause(bool),
+    FileLoaded,
+    FileError,
     Eof,
 }
 
@@ -106,10 +108,15 @@ impl MpvManager {
                                     _ => {}
                                 }
                             }
+                            "file-loaded" => {
+                                let _ = ev_tx.send(MpvEvent::FileLoaded).await;
+                            }
                             "end-file" => {
                                 let reason = val.get("reason").and_then(|r| r.as_str()).unwrap_or("");
                                 if reason == "eof" {
                                     let _ = ev_tx.send(MpvEvent::Eof).await;
+                                } else if reason == "error" {
+                                    let _ = ev_tx.send(MpvEvent::FileError).await;
                                 }
                             }
                             _ => {}
@@ -122,10 +129,25 @@ impl MpvManager {
         // Writer task
         tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
-                let json_cmd = match cmd {
-                    MpvCommand::LoadFile(url) => {
-                        json!({"command": ["loadfile", url, "replace"]})
+                if let MpvCommand::LoadFile(url) = cmd {
+                    let cmds = [
+                        json!({"command": ["loadfile", url, "replace"]}),
+                        json!({"command": ["set_property", "pause", false]}),
+                    ];
+                    for c in &cmds {
+                        if let Ok(mut l) = serde_json::to_string(c) {
+                            l.push('\n');
+                            if let Err(e) = writer.write_all(l.as_bytes()).await {
+                                error!("Failed to write to MPV socket: {}", e);
+                                break;
+                            }
+                        }
                     }
+                    continue;
+                }
+
+                let json_cmd = match cmd {
+                    MpvCommand::LoadFile(_) => unreachable!(),
                     MpvCommand::SetPause(paused) => {
                         json!({"command": ["set_property", "pause", paused]})
                     }
