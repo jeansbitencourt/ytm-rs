@@ -32,6 +32,9 @@ impl App {
                             self.start_radio_for_track(&vid, &title).await;
                         }
                     }
+                    PlayerButton::Shuffle => {
+                        let _ = send_daemon_command(&self.config, DaemonCommand::ToggleShuffle).await;
+                    }
                     PlayerButton::VolDown => {
                         let _ = send_daemon_command(&self.config, DaemonCommand::VolumeDelta(-5)).await;
                     }

@@ -130,6 +130,10 @@ impl App {
                     self.refresh_data().await;
                     return Ok(());
                 }
+                KeyCode::Char('s') | KeyCode::Char('S') => {
+                    let _ = send_daemon_command(&self.config, DaemonCommand::ToggleShuffle).await;
+                    return Ok(());
+                }
                 KeyCode::Char('1') => {
                     self.active_panel = ActivePanel::Sidebar;
                     return Ok(());

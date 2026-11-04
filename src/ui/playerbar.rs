@@ -14,6 +14,7 @@ pub enum PlayerButton {
     Next,
     Like,
     Radio,
+    Shuffle,
     VolDown,
     VolUp,
     Account,
@@ -43,13 +44,15 @@ pub fn get_player_button_at(col: u16, row: u16, playerbar_area: Rect) -> Option<
         Some(PlayerButton::Like)
     } else if (43..=55).contains(&rel_x) {
         Some(PlayerButton::Radio)
-    } else if (56..=66).contains(&rel_x) {
+    } else if (56..=68).contains(&rel_x) {
+        Some(PlayerButton::Shuffle)
+    } else if (69..=80).contains(&rel_x) {
         Some(PlayerButton::VolDown)
-    } else if (67..=78).contains(&rel_x) {
+    } else if (81..=93).contains(&rel_x) {
         Some(PlayerButton::VolUp)
-    } else if (79..=91).contains(&rel_x) {
+    } else if (94..=106).contains(&rel_x) {
         Some(PlayerButton::Account)
-    } else if (92..=103).contains(&rel_x) {
+    } else if (107..=118).contains(&rel_x) {
         Some(PlayerButton::Help)
     } else {
         None
@@ -283,6 +286,7 @@ pub fn render_playerbar(
     };
 
     let like_str = if player.is_liked { " ♥" } else { "" };
+    let shuffle_tag = if player.shuffle_enabled { " • 🔀 Aleatório" } else { "" };
 
     let top_line = Line::from(vec![
         Span::styled(status_icon, theme.accent_style().add_modifier(Modifier::BOLD)),
@@ -290,7 +294,7 @@ pub fn render_playerbar(
         Span::styled(like_str, theme.liked_style()),
         Span::styled(" — ", theme.muted_style()),
         Span::styled(artist, theme.text_style()),
-        Span::styled("  [Opus 160kbps • Daemon ON]", theme.muted_style()),
+        Span::styled(format!("  [Opus 160kbps • Daemon ON{}]", shuffle_tag), theme.muted_style()),
     ]);
     f.render_widget(Paragraph::new(top_line), right_chunks[0]);
 
@@ -307,6 +311,12 @@ pub fn render_playerbar(
         theme.muted_style()
     };
 
+    let shuffle_style = if player.shuffle_enabled {
+        theme.playing_indicator_style().add_modifier(Modifier::BOLD)
+    } else {
+        theme.muted_style()
+    };
+
     let btn_style = theme.focused_border_style();
 
     let buttons_line = Line::from(vec![
@@ -315,6 +325,7 @@ pub fn render_playerbar(
         Span::styled("[⏭ Next]   ", btn_style),
         Span::styled("[♥ Like]   ", like_style),
         Span::styled("[📻 Rádio]   ", theme.accent_style()),
+        Span::styled("[🔀 Aleat]   ", shuffle_style),
         Span::styled("[🔉 Vol-]  ", theme.text_style()),
         Span::styled("[🔊 Vol+]   ", theme.text_style()),
         Span::styled("[👤 Conta]   ", theme.accent_style()),
@@ -366,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_button_hit_detection() {
-        let area = Rect::new(0, 10, 120, 5);
+        let area = Rect::new(0, 10, 130, 5);
         // buttons start at area.x + 9 = 9; row is 10 + 1 (border) + 1 (row 1) = 12
         assert_eq!(get_player_button_at(9, 12, area), Some(PlayerButton::Prev));
         assert_eq!(get_player_button_at(18, 12, area), Some(PlayerButton::Prev));
@@ -374,17 +385,18 @@ mod tests {
         assert_eq!(get_player_button_at(32, 12, area), Some(PlayerButton::Next));
         assert_eq!(get_player_button_at(44, 12, area), Some(PlayerButton::Like));
         assert_eq!(get_player_button_at(55, 12, area), Some(PlayerButton::Radio));
-        assert_eq!(get_player_button_at(68, 12, area), Some(PlayerButton::VolDown));
-        assert_eq!(get_player_button_at(80, 12, area), Some(PlayerButton::VolUp));
-        // Account button is at rel_x 79..=91 => col 88..=100
-        assert_eq!(get_player_button_at(88, 12, area), Some(PlayerButton::Account));
-        assert_eq!(get_player_button_at(95, 12, area), Some(PlayerButton::Account));
-        assert_eq!(get_player_button_at(100, 12, area), Some(PlayerButton::Account));
-        // Help button is at rel_x 92..=103 => col 101..=112
-        assert_eq!(get_player_button_at(103, 12, area), Some(PlayerButton::Help));
-        assert_eq!(get_player_button_at(110, 12, area), Some(PlayerButton::Help));
+        assert_eq!(get_player_button_at(65, 12, area), Some(PlayerButton::Shuffle));
+        assert_eq!(get_player_button_at(75, 12, area), Some(PlayerButton::Shuffle));
+        assert_eq!(get_player_button_at(80, 12, area), Some(PlayerButton::VolDown));
+        assert_eq!(get_player_button_at(92, 12, area), Some(PlayerButton::VolUp));
+        // Account button is at rel_x 94..=106 => col 103..=115
+        assert_eq!(get_player_button_at(105, 12, area), Some(PlayerButton::Account));
+        assert_eq!(get_player_button_at(114, 12, area), Some(PlayerButton::Account));
+        // Help button is at rel_x 107..=118 => col 116..=127
+        assert_eq!(get_player_button_at(118, 12, area), Some(PlayerButton::Help));
+        assert_eq!(get_player_button_at(125, 12, area), Some(PlayerButton::Help));
         // Wrong row
-        assert_eq!(get_player_button_at(88, 11, area), None);
+        assert_eq!(get_player_button_at(65, 11, area), None);
     }
 
     #[test]

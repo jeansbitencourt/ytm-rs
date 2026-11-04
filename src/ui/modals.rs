@@ -40,6 +40,7 @@ pub fn render_help_modal(f: &mut Frame, area: Rect, app: &App) {
         ("  n / p (< / >)", "Próxima faixa / Faixa anterior"),
         ("  + / -", "Aumentar / Diminuir volume (±5%)"),
         ("  f", "Favoritar música atual (Like)"),
+        ("  s", "Alternar modo Aleatório (Shuffle ON/OFF) na fila"),
         ("  a", "Adicionar item selecionado (faixa/álbum/artista) à fila"),
         ("  r", "Iniciar Rádio Infinita a partir da faixa selecionada"),
         ("  F5 / Ctrl+R", "Sincronizar e recarregar biblioteca com YouTube"),

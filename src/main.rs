@@ -72,6 +72,8 @@ enum CtlAction {
     Volume { level: u8 },
     /// Favorita / Desfavorita a faixa atual (Like)
     Like,
+    /// Alterna modo aleatório (Shuffle ON/OFF)
+    Shuffle,
     /// Exibe o estado atual em JSON
     Status,
     /// Emite JSON formatado para a Waybar / Top Bar do Omarchy
@@ -437,6 +439,9 @@ async fn run_ctl(config: AppConfig, action: CtlAction) -> Result<()> {
         }
         CtlAction::Like => {
             let _ = send_daemon_command(&config, DaemonCommand::ToggleLike).await?;
+        }
+        CtlAction::Shuffle => {
+            let _ = send_daemon_command(&config, DaemonCommand::ToggleShuffle).await?;
         }
         CtlAction::Status => {
             let resp = send_daemon_command(&config, DaemonCommand::GetState).await?;

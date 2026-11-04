@@ -13,6 +13,52 @@ use super::mpv_ipc::{MpvCommand, MpvEvent, MpvManager};
 use super::prefetch::{resolve_stream_url, spawn_prefetch};
 use super::{DaemonCommand, DaemonResponse, PlaybackStatus, PlayerState};
 
+struct SimpleRng(u64);
+
+impl SimpleRng {
+    fn new() -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(123456789);
+        let pid = std::process::id() as u64;
+        let seed = nanos ^ (pid << 32) ^ 0x9e3779b97f4a7c15;
+        Self(if seed == 0 { 0x853c49e6748fea9b } else { seed })
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+
+    fn gen_range(&mut self, upper: usize) -> usize {
+        if upper <= 1 {
+            return 0;
+        }
+        (self.next_u64() % (upper as u64)) as usize
+    }
+}
+
+pub fn shuffle_tracks_preserving_current(tracks: &mut Vec<Track>, current_idx: usize) {
+    if tracks.is_empty() {
+        return;
+    }
+    if current_idx < tracks.len() && current_idx != 0 {
+        tracks.swap(0, current_idx);
+    }
+    if tracks.len() > 2 {
+        let mut rng = SimpleRng::new();
+        for i in (2..tracks.len()).rev() {
+            let j = 1 + rng.gen_range(i);
+            tracks.swap(i, j);
+        }
+    }
+}
+
 pub struct AudioDaemon {
     config: AppConfig,
     state: Arc<Mutex<PlayerState>>,
@@ -22,6 +68,7 @@ pub struct AudioDaemon {
     prefetch_triggered: Arc<Mutex<bool>>,
     tui_clients: Arc<Mutex<usize>>,
     play_generation: Arc<Mutex<u64>>,
+    original_queue: Arc<Mutex<Vec<Track>>>,
 }
 
 impl AudioDaemon {
@@ -55,6 +102,7 @@ impl AudioDaemon {
                 prefetch_triggered: Arc::new(Mutex::new(false)),
                 tui_clients: Arc::new(Mutex::new(0)),
                 play_generation: Arc::new(Mutex::new(0)),
+                original_queue: Arc::new(Mutex::new(Vec::new())),
             },
             mpv_event_rx,
         ))
@@ -279,11 +327,26 @@ impl AudioDaemon {
         if tracks.is_empty() {
             return;
         }
-        let selected_track = tracks.get(start_idx).cloned();
+
+        let selected_track;
         {
             let mut state = self.state.lock().await;
-            state.queue = tracks;
-            state.queue_index = start_idx;
+            let mut orig_queue = self.original_queue.lock().await;
+
+            if state.shuffle_enabled {
+                *orig_queue = tracks.clone();
+                let mut shuffled = tracks;
+                let valid_start = start_idx.min(shuffled.len().saturating_sub(1));
+                shuffle_tracks_preserving_current(&mut shuffled, valid_start);
+                selected_track = shuffled.first().cloned();
+                state.queue = shuffled;
+                state.queue_index = 0;
+            } else {
+                orig_queue.clear();
+                selected_track = tracks.get(start_idx).cloned();
+                state.queue = tracks;
+                state.queue_index = start_idx;
+            }
         }
 
         if let Some(track) = selected_track {
@@ -294,6 +357,10 @@ impl AudioDaemon {
     pub async fn enqueue_track(self: &Arc<Self>, track: Track) {
         let should_play = {
             let mut state = self.state.lock().await;
+            let mut orig_queue = self.original_queue.lock().await;
+            if state.shuffle_enabled {
+                orig_queue.push(track.clone());
+            }
             state.queue.push(track.clone());
             state.current_track.is_none() || state.status == PlaybackStatus::Stopped
         };
@@ -376,6 +443,42 @@ impl AudioDaemon {
             }
             PlaybackStatus::Buffering => {}
         }
+        drop(state);
+        self.broadcast_and_save().await;
+    }
+
+    pub async fn toggle_shuffle(&self) {
+        let mut state = self.state.lock().await;
+        let new_shuffle = !state.shuffle_enabled;
+        state.shuffle_enabled = new_shuffle;
+
+        let mut orig_queue = self.original_queue.lock().await;
+
+        if new_shuffle {
+            // Turning ON shuffle
+            if !state.queue.is_empty() {
+                *orig_queue = state.queue.clone();
+                let cur_idx = state.queue_index.min(state.queue.len().saturating_sub(1));
+                shuffle_tracks_preserving_current(&mut state.queue, cur_idx);
+                state.queue_index = 0;
+            }
+        } else {
+            // Turning OFF shuffle
+            if !orig_queue.is_empty() {
+                let cur_vid = state.current_track.as_ref().map(|t| t.video_id.as_str());
+                let restored_idx = if let Some(vid) = cur_vid {
+                    orig_queue.iter().position(|t| t.video_id == vid).unwrap_or(0)
+                } else {
+                    0
+                };
+                state.queue = orig_queue.clone();
+                state.queue_index = restored_idx;
+                orig_queue.clear();
+            }
+        }
+
+        *self.prefetch_triggered.lock().await = false;
+        drop(orig_queue);
         drop(state);
         self.broadcast_and_save().await;
     }
@@ -507,6 +610,7 @@ impl AudioDaemon {
             "cover_url": thumbnail_url,
             "volume": state.volume,
             "liked": state.is_liked,
+            "shuffle": state.shuffle_enabled,
             "position": state.position_secs,
             "duration": state.duration_secs,
         });
@@ -686,6 +790,13 @@ impl AudioDaemon {
                     json.push('\n');
                     writer.write_all(json.as_bytes()).await?;
                 }
+                DaemonCommand::ToggleShuffle => {
+                    self.toggle_shuffle().await;
+                    let resp = DaemonResponse::Ok;
+                    let mut json = serde_json::to_string(&resp)?;
+                    json.push('\n');
+                    writer.write_all(json.as_bytes()).await?;
+                }
                 DaemonCommand::StartRadio(_) => {
                     // Handled in coordination with innertube
                     let resp = DaemonResponse::Ok;
@@ -764,4 +875,46 @@ pub async fn ensure_daemon_running(config: &AppConfig) -> Result<()> {
     }
 
     Err(anyhow::anyhow!("Timed out waiting for daemon socket to be created"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shuffle_tracks_preserving_current() {
+        let make_track = |id: &str| Track::new(id, id, "Artist", "Album", 180, "");
+
+        // Empty vector
+        let mut tracks: Vec<Track> = Vec::new();
+        shuffle_tracks_preserving_current(&mut tracks, 0);
+        assert!(tracks.is_empty());
+
+        // Single track
+        let mut tracks = vec![make_track("t1")];
+        shuffle_tracks_preserving_current(&mut tracks, 0);
+        assert_eq!(tracks[0].video_id, "t1");
+
+        // Two tracks
+        let mut tracks = vec![make_track("t1"), make_track("t2")];
+        shuffle_tracks_preserving_current(&mut tracks, 1);
+        assert_eq!(tracks[0].video_id, "t2");
+        assert_eq!(tracks[1].video_id, "t1");
+
+        // Multiple tracks: ensure selected track is ALWAYS at index 0 and all tracks preserved
+        let mut tracks = vec![
+            make_track("t0"),
+            make_track("t1"),
+            make_track("t2"),
+            make_track("t3"),
+            make_track("t4"),
+        ];
+        shuffle_tracks_preserving_current(&mut tracks, 3);
+        assert_eq!(tracks[0].video_id, "t3");
+        assert_eq!(tracks.len(), 5);
+
+        let mut ids: Vec<String> = tracks.iter().map(|t| t.video_id.clone()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["t0", "t1", "t2", "t3", "t4"]);
+    }
 }

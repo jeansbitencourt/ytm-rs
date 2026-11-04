@@ -30,6 +30,8 @@ pub struct PlayerState {
     pub queue: Vec<Track>,
     pub queue_index: usize,
     pub is_radio_active: bool,
+    #[serde(default)]
+    pub shuffle_enabled: bool,
 }
 
 impl Default for PlayerState {
@@ -44,6 +46,7 @@ impl Default for PlayerState {
             queue: Vec::new(),
             queue_index: 0,
             is_radio_active: false,
+            shuffle_enabled: false,
         }
     }
 }
@@ -63,6 +66,7 @@ pub enum DaemonCommand {
     VolumeDelta(i32),
     SetVolume(u8),
     ToggleLike,
+    ToggleShuffle,
     StartRadio(Track),
     GetState,
     Subscribe,
@@ -87,7 +91,14 @@ mod tests {
         let deserialized: DaemonCommand = serde_json::from_str(&serialized).unwrap();
         assert_eq!(cmd, deserialized);
 
-        let state = PlayerState::default();
+        let shuf_cmd = DaemonCommand::ToggleShuffle;
+        let shuf_ser = serde_json::to_string(&shuf_cmd).unwrap();
+        let shuf_deser: DaemonCommand = serde_json::from_str(&shuf_ser).unwrap();
+        assert_eq!(shuf_cmd, shuf_deser);
+
+        let mut state = PlayerState::default();
+        assert!(!state.shuffle_enabled);
+        state.shuffle_enabled = true;
         let resp = DaemonResponse::State(Box::new(state));
         let serialized_resp = serde_json::to_string(&resp).unwrap();
         let deserialized_resp: DaemonResponse = serde_json::from_str(&serialized_resp).unwrap();

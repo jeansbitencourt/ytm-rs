@@ -45,7 +45,7 @@ pub fn render_tracklist(
 
     let title = Line::from(vec![
         Span::styled(format!(" Faixas: {} [2] ", title_text), theme.title_style()),
-        Span::styled("── [f: Favoritar | a: Add Fila | r: Rádio | q: Esconder] ", theme.muted_style()),
+        Span::styled("── [f: Favoritar | a: Add Fila | s: Aleatório | r: Rádio | q: Esconder] ", theme.muted_style()),
     ]);
 
     let block = Block::default()
