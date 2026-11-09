@@ -72,12 +72,26 @@ BarWidget {
   }
 
   FileView {
+    id: statusFile
     path: root.statusPath
     watchChanges: true
     atomicWrites: true
     printErrors: false
-    onLoaded: root.applyStatus(text())
+    onLoaded: {
+      root.applyStatus(text())
+      statusRetry.stop()
+    }
+    onLoadFailed: statusRetry.start()
     onFileChanged: reload()
+  }
+
+  // Tenta novamente somente se o arquivo ainda não puder ser carregado.
+  Timer {
+    id: statusRetry
+    interval: 1000
+    running: false
+    repeat: true
+    onTriggered: statusFile.reload()
   }
 
   implicitWidth: button.implicitWidth
