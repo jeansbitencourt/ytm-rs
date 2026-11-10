@@ -1,11 +1,15 @@
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT};
+use reqwest::header::{
+    HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT,
+};
 use serde_json::{json, Value};
 use tracing::warn;
 
 use super::auth::AuthConfig;
 pub use super::parsers::*;
 use super::{AlbumSummary, ArtistSummary, PlaylistSummary, SearchFilter, Track, UserProfile};
+use crate::config::AppConfig;
+use crate::i18n::{I18n, LanguagePreference};
 
 const INNERTUBE_BASE_URL: &str = "https://music.youtube.com/youtubei/v1";
 const YOUTUBE_BASE_URL: &str = "https://www.youtube.com/youtubei/v1";
@@ -28,11 +32,15 @@ impl InnertubeClient {
     }
 
     fn default_context() -> Value {
+        let preference = AppConfig::load()
+            .map(|config| config.settings.general.language)
+            .unwrap_or(LanguagePreference::Auto);
+        let language = I18n::new(preference).language.code();
         json!({
             "client": {
                 "clientName": "WEB_REMIX",
                 "clientVersion": "1.20261027.10.00",
-                "hl": "pt-BR",
+                "hl": language,
                 "gl": "BR"
             }
         })
@@ -53,7 +61,10 @@ impl InnertubeClient {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(ORIGIN, HeaderValue::from_static(WEB_REMIX_ORIGIN));
         headers.insert("X-Origin", HeaderValue::from_static(WEB_REMIX_ORIGIN));
-        headers.insert(REFERER, HeaderValue::from_static("https://music.youtube.com/"));
+        headers.insert(
+            REFERER,
+            HeaderValue::from_static("https://music.youtube.com/"),
+        );
         headers.insert(USER_AGENT, HeaderValue::from_static(DEFAULT_USER_AGENT));
         headers.insert("X-Goog-AuthUser", HeaderValue::from_static("0"));
 
@@ -121,14 +132,19 @@ impl InnertubeClient {
         });
 
         let headers = self.build_web_headers();
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers)
             .json(&payload)
             .send()
             .await
             .context("Failed to send search request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse search response JSON")?;
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse search response JSON")?;
         let tracks = parse_search_results(&body);
         if tracks.is_empty() {
             // Fallback to search without params
@@ -137,7 +153,14 @@ impl InnertubeClient {
                 "query": query,
             });
             let headers = self.build_web_headers();
-            if let Ok(r) = self.http.post(&url).headers(headers).json(&payload_fallback).send().await {
+            if let Ok(r) = self
+                .http
+                .post(&url)
+                .headers(headers)
+                .json(&payload_fallback)
+                .send()
+                .await
+            {
                 if let Ok(b) = r.json::<Value>().await {
                     return Ok(parse_search_results(&b));
                 }
@@ -157,14 +180,19 @@ impl InnertubeClient {
         });
 
         let headers = self.build_web_headers();
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers)
             .json(&payload)
             .send()
             .await
             .context("Failed to send radio request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse radio response JSON")?;
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse radio response JSON")?;
         Ok(parse_radio_results(&body))
     }
 
@@ -189,14 +217,19 @@ impl InnertubeClient {
             )
         };
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers)
             .json(&payload)
             .send()
             .await
             .context("Failed to send continuation request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse continuation response JSON")?;
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse continuation response JSON")?;
         Ok(body)
     }
 
@@ -221,14 +254,19 @@ impl InnertubeClient {
             )
         };
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers)
             .json(&payload)
             .send()
             .await
             .context("Failed to send browse request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse browse response JSON")?;
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse browse response JSON")?;
         let mut tracks = parse_playlist_results(&body);
         let mut continuation_token = extract_browse_continuation_token(&body);
 
@@ -283,7 +321,9 @@ impl InnertubeClient {
             )
         };
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers)
             .json(&payload)
             .send()
@@ -305,14 +345,19 @@ impl InnertubeClient {
         });
 
         let headers = self.build_web_headers();
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers)
             .json(&payload)
             .send()
             .await
             .context("Failed to send album search request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse album search response JSON")?;
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse album search response JSON")?;
         Ok(parse_album_search_results(&body))
     }
 
@@ -325,14 +370,19 @@ impl InnertubeClient {
         });
 
         let headers = self.build_web_headers();
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers)
             .json(&payload)
             .send()
             .await
             .context("Failed to send artist search request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse artist search response JSON")?;
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse artist search response JSON")?;
         Ok(parse_artist_search_results(&body))
     }
 
@@ -344,14 +394,19 @@ impl InnertubeClient {
         });
 
         let headers = self.build_web_headers();
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers)
             .json(&payload)
             .send()
             .await
             .context("Failed to send album browse request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse album browse response JSON")?;
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse album browse response JSON")?;
         Ok(parse_album_browse_tracks(&body))
     }
 
@@ -363,14 +418,19 @@ impl InnertubeClient {
         });
 
         let headers = self.build_web_headers();
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers.clone())
             .json(&payload)
             .send()
             .await
             .context("Failed to send artist browse request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse artist browse response JSON")?;
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse artist browse response JSON")?;
 
         let artist_name = body
             .pointer("/header/musicImmersiveHeaderRenderer/title/runs/0/text")
@@ -396,7 +456,14 @@ impl InnertubeClient {
                 "context": Self::default_context(),
                 "browseId": bid
             });
-            if let Ok(r2) = self.http.post(&url).headers(headers).json(&payload2).send().await {
+            if let Ok(r2) = self
+                .http
+                .post(&url)
+                .headers(headers)
+                .json(&payload2)
+                .send()
+                .await
+            {
                 if let Ok(b2) = r2.json::<Value>().await {
                     let mut playlist_tracks = parse_playlist_results(&b2);
                     if !playlist_tracks.is_empty() {
@@ -442,14 +509,19 @@ impl InnertubeClient {
             });
 
             let headers = self.build_tv_headers();
-            let resp = self.http.post(&url)
+            let resp = self
+                .http
+                .post(&url)
                 .headers(headers)
                 .json(&payload)
                 .send()
                 .await
                 .context("Failed to send guide request to Innertube")?;
 
-            let body: Value = resp.json().await.context("Failed to parse guide response JSON")?;
+            let body: Value = resp
+                .json()
+                .await
+                .context("Failed to parse guide response JSON")?;
             Ok(parse_user_profile(&body))
         } else {
             let url = format!("{}/account/account_menu", INNERTUBE_BASE_URL);
@@ -458,14 +530,19 @@ impl InnertubeClient {
             });
 
             let headers = self.build_web_headers();
-            let resp = self.http.post(&url)
+            let resp = self
+                .http
+                .post(&url)
                 .headers(headers)
                 .json(&payload)
                 .send()
                 .await
                 .context("Failed to send account_menu request to Innertube")?;
 
-            let body: Value = resp.json().await.context("Failed to parse account_menu response JSON")?;
+            let body: Value = resp
+                .json()
+                .await
+                .context("Failed to parse account_menu response JSON")?;
             Ok(parse_user_profile(&body))
         }
     }
@@ -492,14 +569,19 @@ impl InnertubeClient {
             )
         };
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers.clone())
             .json(&payload)
             .send()
             .await
             .context("Failed to send library playlists request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse library playlists response JSON")?;
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse library playlists response JSON")?;
         let mut list = parse_library_playlists(&body);
         if list.is_empty() && !self.auth.has_oauth() {
             // Fallback to FEmusic_library_landing for Web mode
@@ -507,7 +589,14 @@ impl InnertubeClient {
                 "context": Self::default_context(),
                 "browseId": "FEmusic_library_landing"
             });
-            if let Ok(r) = self.http.post(&url).headers(headers).json(&payload_fallback).send().await {
+            if let Ok(r) = self
+                .http
+                .post(&url)
+                .headers(headers)
+                .json(&payload_fallback)
+                .send()
+                .await
+            {
                 if let Ok(b) = r.json::<Value>().await {
                     list = parse_library_playlists(&b);
                 }
@@ -544,14 +633,19 @@ impl InnertubeClient {
             )
         };
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .headers(headers)
             .json(&payload)
             .send()
             .await
             .context("Failed to send playlist browse request to Innertube")?;
 
-        let body: Value = resp.json().await.context("Failed to parse playlist browse response JSON")?;
+        let body: Value = resp
+            .json()
+            .await
+            .context("Failed to parse playlist browse response JSON")?;
 
         let title = body
             .pointer("/contents/tvBrowseRenderer/content/tvSurfaceContentRenderer/content/twoColumnRenderer/leftColumn/entityMetadataRenderer/title/simpleText")
@@ -592,21 +686,34 @@ impl InnertubeClient {
                 "context": Self::default_context(),
                 "browseId": clean_id
             });
-            if let Ok(resp2) = self.http.post(&web_url).headers(self.build_web_headers()).json(&web_payload).send().await {
+            if let Ok(resp2) = self
+                .http
+                .post(&web_url)
+                .headers(self.build_web_headers())
+                .json(&web_payload)
+                .send()
+                .await
+            {
                 if let Ok(body2) = resp2.json::<Value>().await {
                     let mut t2 = parse_playlist_results(&body2);
                     if !t2.is_empty() {
                         let mut cont2 = extract_browse_continuation_token(&body2);
                         let mut p = 1;
                         while let Some(tok2) = cont2 {
-                            if p >= 30 { break; }
+                            if p >= 30 {
+                                break;
+                            }
                             if let Ok(cb) = self.browse_continuation(&tok2).await {
                                 let (ct, nt) = parse_continuation_response(&cb);
-                                if ct.is_empty() { break; }
+                                if ct.is_empty() {
+                                    break;
+                                }
                                 t2.extend(ct);
                                 cont2 = nt;
                                 p += 1;
-                            } else { break; }
+                            } else {
+                                break;
+                            }
                         }
                         return Ok((title, t2));
                     }

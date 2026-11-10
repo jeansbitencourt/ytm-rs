@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use crate::cache::Database;
 use anyhow::{Context, Result};
+use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
-use crate::cache::Database;
 
 pub async fn resolve_stream_url(video_id: &str, db: &Arc<Mutex<Database>>) -> Result<String> {
     // 1. Check local SQLite cache first
@@ -15,7 +15,10 @@ pub async fn resolve_stream_url(video_id: &str, db: &Arc<Mutex<Database>>) -> Re
         }
     }
 
-    info!("Extracting Opus stream URL via yt-dlp for video_id: {}", video_id);
+    info!(
+        "Extracting Opus stream URL via yt-dlp for video_id: {}",
+        video_id
+    );
     let watch_url = format!("https://music.youtube.com/watch?v={}", video_id);
 
     let output = Command::new("yt-dlp")

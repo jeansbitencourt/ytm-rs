@@ -1,13 +1,18 @@
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use crossterm::event::{
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyEventKind,
+};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use std::io::stdout;
 use std::sync::Arc;
 use std::time::Duration;
-use anyhow::Result;
-use clap::{Parser, Subcommand};
-use crossterm::event::{self, Event, KeyEventKind, EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste};
-use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
@@ -24,7 +29,10 @@ use ytm_rs::ui;
 
 #[derive(Parser)]
 #[command(name = "ytm-rs")]
-#[command(about = "YouTube Music TUI and background daemon for Omarchy", version = "0.1.0")]
+#[command(
+    about = "YouTube Music TUI and background daemon for Omarchy",
+    version = "0.1.0"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -32,16 +40,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Inicia o daemon de áudio em segundo plano
+    /// Start the audio daemon in the background
     Daemon,
-    /// Envia comandos rápidos de controle ao daemon em execução (< 2ms)
+    /// Send quick control commands to the running daemon (< 2 ms)
     Ctl {
         #[command(subcommand)]
         action: CtlAction,
     },
-    /// Foca na janela existente do YTM-RS ou abre uma nova no terminal apropriado
+    /// Focus the existing YTM-RS window or open a new one in the appropriate terminal
     Launch,
-    /// Gerencia autenticação no YouTube Music (cookies e conta)
+    /// Manage YouTube Music authentication (cookies and account)
     Auth {
         #[command(subcommand)]
         action: Option<AuthAction>,
@@ -50,45 +58,45 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum CtlAction {
-    /// Foca na janela existente do YTM-RS ou abre uma nova se não existir
+    /// Focus the existing YTM-RS window or open a new one if it does not exist
     Focus,
-    /// Alterna reprodução / pausa
+    /// Toggle playback / pause
     Toggle,
-    /// Inicia reprodução
+    /// Start playback
     Play,
-    /// Pausa reprodução
+    /// Pause playback
     Pause,
-    /// Para a reprodução
+    /// Stop playback
     Stop,
-    /// Avança para a próxima faixa
+    /// Skip to the next track
     Next,
-    /// Volta para a faixa anterior
+    /// Go back to the previous track
     Prev,
-    /// Aumenta o volume (+5%)
+    /// Increase volume (+5%)
     VolUp,
-    /// Diminui o volume (-5%)
+    /// Decrease volume (-5%)
     VolDown,
-    /// Define o volume exato (0-100)
+    /// Set the exact volume (0-100)
     Volume { level: u8 },
-    /// Favorita / Desfavorita a faixa atual (Like)
+    /// Like / unlike the current track
     Like,
-    /// Alterna modo aleatório (Shuffle ON/OFF)
+    /// Toggle shuffle mode (Shuffle ON/OFF)
     Shuffle,
-    /// Exibe o estado atual em JSON
+    /// Display the current state as JSON
     Status,
-    /// Emite JSON formatado para a Waybar / Top Bar do Omarchy
+    /// Emit formatted JSON for Waybar / the Omarchy Top Bar
     Waybar,
 }
 
 #[derive(Subcommand)]
 enum AuthAction {
-    /// Exibe o status da autenticação atual
+    /// Display the current authentication status
     Status,
-    /// Inicia login interativo com a conta Google via código na TV (google.com/device)
+    /// Start interactive Google login using a TV code (google.com/device)
     Login,
-    /// Salva cookies do YouTube Music
+    /// Save YouTube Music cookies
     Cookies { value: String },
-    /// Remove credenciais de autenticação
+    /// Remove authentication credentials
     Logout,
 }
 
@@ -161,13 +169,11 @@ fn detect_terminal_launcher() -> TerminalInvocation {
     }
 
     // 2. If Foot is not installed, check if user explicitly requested a terminal via YTM_TERMINAL or TERMINAL
-    let user_terminal = std::env::var("YTM_TERMINAL")
-        .ok()
-        .or_else(|| {
-            std::env::var("TERMINAL")
-                .ok()
-                .filter(|t| t.trim() != "xdg-terminal-exec" && !t.trim().is_empty())
-        });
+    let user_terminal = std::env::var("YTM_TERMINAL").ok().or_else(|| {
+        std::env::var("TERMINAL")
+            .ok()
+            .filter(|t| t.trim() != "xdg-terminal-exec" && !t.trim().is_empty())
+    });
 
     if let Some(term) = user_terminal {
         let term_trimmed = term.trim();
@@ -371,10 +377,20 @@ fn focus_or_launch_window() {
             if let Some(arr) = val.as_array() {
                 for client in arr {
                     let class = client.get("class").and_then(|c| c.as_str()).unwrap_or("");
-                    let initial_class = client.get("initialClass").and_then(|c| c.as_str()).unwrap_or("");
+                    let initial_class = client
+                        .get("initialClass")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("");
                     let title = client.get("title").and_then(|c| c.as_str()).unwrap_or("");
-                    let initial_title = client.get("initialTitle").and_then(|c| c.as_str()).unwrap_or("");
-                    if class == "ytm-rs" || initial_class == "ytm-rs" || title == "YTM-RS" || initial_title == "YTM-RS" {
+                    let initial_title = client
+                        .get("initialTitle")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("");
+                    if class == "ytm-rs"
+                        || initial_class == "ytm-rs"
+                        || title == "YTM-RS"
+                        || initial_title == "YTM-RS"
+                    {
                         if let Some(addr) = client.get("address").and_then(|a| a.as_str()) {
                             window_address = Some(addr.to_string());
                         }
@@ -395,7 +411,10 @@ fn focus_or_launch_window() {
                 mon, addr
             )
         } else {
-            format!("hl.dispatch(hl.dsp.focus({{ window = 'address:{}' }}))", addr)
+            format!(
+                "hl.dispatch(hl.dsp.focus({{ window = 'address:{}' }}))",
+                addr
+            )
         };
         let _ = std::process::Command::new("hyprctl")
             .args(["eval", &lua_cmd])
@@ -475,13 +494,22 @@ async fn run_auth(config: AppConfig, action: Option<AuthAction>) -> Result<()> {
         }
         Some(AuthAction::Login) => {
             println!("Iniciando autenticação Google Device Flow (RFC 8628)...");
-            let device_res = ytm_rs::innertube::oauth::request_device_code(ytm_rs::innertube::oauth::DEFAULT_CLIENT_ID).await?;
+            let device_res = ytm_rs::innertube::oauth::request_device_code(
+                ytm_rs::innertube::oauth::DEFAULT_CLIENT_ID,
+            )
+            .await?;
             println!("\n╔══════════════════════════════════════════════════════════════════╗");
-            println!("║  1. Acesse no navegador: {:<39} ║", device_res.verification_url);
+            println!(
+                "║  1. Acesse no navegador: {:<39} ║",
+                device_res.verification_url
+            );
             println!("║  2. Digite o código:     {:<39} ║", device_res.user_code);
             println!("║  3. Conecte sua conta Google e clique em Permitir               ║");
             println!("╚══════════════════════════════════════════════════════════════════╝\n");
-            println!("⏳ Aguardando autorização no navegador (código expira em {} min)...", device_res.expires_in / 60);
+            println!(
+                "⏳ Aguardando autorização no navegador (código expira em {} min)...",
+                device_res.expires_in / 60
+            );
 
             let poll_interval = Duration::from_secs(device_res.interval.max(5));
             let start = std::time::Instant::now();
@@ -493,7 +521,9 @@ async fn run_auth(config: AppConfig, action: Option<AuthAction>) -> Result<()> {
                     ytm_rs::innertube::oauth::DEFAULT_CLIENT_ID,
                     ytm_rs::innertube::oauth::DEFAULT_CLIENT_SECRET,
                     &device_res.device_code,
-                ).await? {
+                )
+                .await?
+                {
                     ytm_rs::innertube::oauth::PollResult::Success(tok) => {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -514,7 +544,9 @@ async fn run_auth(config: AppConfig, action: Option<AuthAction>) -> Result<()> {
                             println!("✓ Conectado como: {} ({})", profile.name, profile.handle);
                         }
                         println!("✓ Credenciais salvas em: {:?}", config.auth_file);
-                        println!("O token permanente foi registrado e será renovado automaticamente!");
+                        println!(
+                            "O token permanente foi registrado e será renovado automaticamente!"
+                        );
                         return Ok(());
                     }
                     ytm_rs::innertube::oauth::PollResult::Pending => {
@@ -573,7 +605,12 @@ async fn run_tui(config: AppConfig) -> Result<()> {
     // 2. Terminal setup
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -593,7 +630,9 @@ async fn run_tui(config: AppConfig) -> Result<()> {
 
             let mut lines = BufReader::new(reader).lines();
             while let Ok(Some(msg)) = lines.next_line().await {
-                if let Ok(DaemonResponse::State(new_state)) = serde_json::from_str::<DaemonResponse>(&msg) {
+                if let Ok(DaemonResponse::State(new_state)) =
+                    serde_json::from_str::<DaemonResponse>(&msg)
+                {
                     let mut s = shared_for_sock.lock().await;
                     *s = *new_state;
                 }
@@ -620,6 +659,15 @@ async fn run_tui(config: AppConfig) -> Result<()> {
         if let Some(watcher) = &theme_watcher {
             if watcher.rx.try_recv().is_ok() {
                 app.theme = Theme::load_omarchy();
+            }
+        }
+
+        // In automatic mode, follow a language changed from Omarchy Setup while
+        // this TUI is already open. The audio daemon remains independent.
+        if app.i18n.preference == ytm_rs::i18n::LanguagePreference::Auto {
+            let refreshed = ytm_rs::i18n::I18n::new(app.i18n.preference);
+            if refreshed.language != app.i18n.language {
+                app.i18n = refreshed;
             }
         }
 
@@ -667,7 +715,12 @@ async fn run_tui(config: AppConfig) -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture, DisableBracketedPaste)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        DisableBracketedPaste
+    )?;
     terminal.show_cursor()?;
 
     Ok(())

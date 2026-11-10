@@ -27,6 +27,9 @@ BarWidget {
   property bool isLiked: false
   property double position: 0
   property double duration: 0
+  property string uiLanguage: "pt-BR"
+
+  function tr(pt, en) { return root.uiLanguage.indexOf("en") === 0 ? en : pt }
 
   readonly property string statusPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/ytm-rs/status.json"
 
@@ -58,8 +61,9 @@ BarWidget {
       root.isLiked = data.liked === true
       root.position = Number(data.position || 0)
       root.duration = Number(data.duration || 0)
+      root.uiLanguage = root.sanitize(data.language || "pt-BR", 16)
     } catch (e) {
-      // Ignora erro transitório durante escrita atômica
+      // Ignore transient errors while the file is being written atomically
     }
   }
 
@@ -85,7 +89,7 @@ BarWidget {
     onFileChanged: reload()
   }
 
-  // Tenta novamente somente se o arquivo ainda não puder ser carregado.
+  // Retry only while the file cannot be loaded.
   Timer {
     id: statusRetry
     interval: 1000
@@ -107,31 +111,31 @@ BarWidget {
     tooltipText: root.isPlaying
       ? "Tocando: " + root.sanitize(root.trackArtist ? root.trackArtist + " - " + root.trackTitle : root.trackTitle, 140)
         + (root.isLiked ? " ♥" : "")
-        + " · Vol: " + root.volume + "%\nBotão esquerdo: Focar janela | Botão direito: Menu"
+        + " · Vol: " + root.volume + "%\n" + root.tr("Botão esquerdo: Focar janela | Botão direito: Menu", "Left button: Focus window | Right button: Menu")
       : root.isPaused
-      ? "Pausado: " + root.sanitize(root.trackArtist ? root.trackArtist + " - " + root.trackTitle : root.trackTitle, 140)
-        + " · Vol: " + root.volume + "%\nBotão esquerdo: Focar janela | Botão direito: Menu"
+      ? root.tr("Pausado: ", "Paused: ") + root.sanitize(root.trackArtist ? root.trackArtist + " - " + root.trackTitle : root.trackTitle, 140)
+        + " · Vol: " + root.volume + "%\n" + root.tr("Botão esquerdo: Focar janela | Botão direito: Menu", "Left button: Focus window | Right button: Menu")
       : root.tuiOpen
-      ? "YTM-RS: Janela aberta (Pronto)\nBotão esquerdo: Focar janela | Botão direito: Menu"
+      ? root.tr("YTM-RS: Janela aberta (Pronto)\nBotão esquerdo: Focar janela | Botão direito: Menu", "YTM-RS: Window open (Ready)\nLeft button: Focus window | Right button: Menu")
       : root.daemonRunning
-      ? "YTM-RS: Segundo plano ativo\nBotão esquerdo: Abrir | Botão direito: Menu"
-      : "YTM-RS (YouTube Music)\nBotão esquerdo: Abrir | Botão direito: Menu"
+      ? root.tr("YTM-RS: Segundo plano ativo\nBotão esquerdo: Abrir | Botão direito: Menu", "YTM-RS: Running in background\nLeft button: Open | Right button: Menu")
+      : root.tr("YTM-RS (YouTube Music)\nBotão esquerdo: Abrir | Botão direito: Menu", "YTM-RS (YouTube Music)\nLeft button: Open | Right button: Menu")
 
     onPressed: function(button) {
       if (button === Qt.LeftButton) {
-        // Foca na janela existente ou abre uma nova
+        // Focus the existing window or open a new one
         root.runCommand("ytm-rs ctl focus")
         return
       }
 
       if (button === Qt.RightButton) {
-        // Abre / fecha modal de controles
+        // Open / close the control modal
         root.popupOpen = !root.popupOpen
         return
       }
 
       if (button === Qt.MiddleButton) {
-        // Curtir música atual
+        // Like the current track
         root.runCommand("ytm-rs ctl like")
         return
       }
@@ -146,7 +150,7 @@ BarWidget {
     }
   }
 
-  // Modal PopupCard com controles avançados ao clicar com o botão direito
+  // PopupCard modal with advanced controls on right-click
   PopupCard {
     id: popup
     anchorItem: button
@@ -161,7 +165,7 @@ BarWidget {
       width: parent.width
       spacing: Style.space(10)
 
-      // 1. Cabeçalho: Ícone + Título e Artista
+      // 1. Header: icon + title and artist
       Row {
         width: parent.width
         spacing: Style.space(12)
@@ -202,7 +206,7 @@ BarWidget {
 
           Text {
             textFormat: Text.PlainText
-            text: root.trackTitle || (root.tuiOpen ? "YTM-RS: Pronto" : "Nenhuma música tocando")
+            text: root.trackTitle || (root.tuiOpen ? root.tr("YTM-RS: Pronto", "YTM-RS: Ready") : root.tr("Nenhuma música tocando", "No music playing"))
             color: root.bar ? root.bar.foreground : "#ffffff"
             font.pixelSize: Style.font.subtitle
             font.bold: true
@@ -212,7 +216,7 @@ BarWidget {
 
           Text {
             textFormat: Text.PlainText
-            text: root.trackArtist || (root.tuiOpen ? "Janela do terminal aberta" : "YouTube Music TUI & Daemon")
+            text: root.trackArtist || (root.tuiOpen ? root.tr("Janela do terminal aberta", "Terminal window open") : "YouTube Music TUI & Daemon")
             color: Qt.darker(root.bar ? root.bar.foreground : "#ffffff", 1.3)
             font.pixelSize: Style.font.bodySmall
             elide: Text.ElideRight
@@ -222,19 +226,19 @@ BarWidget {
           Text {
             textFormat: Text.PlainText
             text: root.isPlaying
-              ? "● Reproduzindo (" + root.formatTime(root.position) + " / " + root.formatTime(root.duration) + ")"
+              ? root.tr("● Reproduzindo (", "● Playing (") + root.formatTime(root.position) + " / " + root.formatTime(root.duration) + ")"
               : root.isPaused
-              ? "⏸ Pausado (" + root.formatTime(root.position) + " / " + root.formatTime(root.duration) + ")"
+              ? root.tr("⏸ Pausado (", "⏸ Paused (") + root.formatTime(root.position) + " / " + root.formatTime(root.duration) + ")"
               : root.tuiOpen
-              ? "● Janela ativa"
-              : "■ Inativo"
+              ? root.tr("● Janela ativa", "● Window active")
+              : root.tr("■ Inativo", "■ Idle")
             color: root.isPlaying ? Commons.Color.accent : root.isPaused ? "#F39C12" : "#888888"
             font.pixelSize: Style.font.caption
           }
         }
       }
 
-      // 2. Barra de Progresso
+      // 2. Progress bar
       Rectangle {
         width: parent.width
         height: Style.space(4)
@@ -249,7 +253,7 @@ BarWidget {
         }
       }
 
-      // 3. Botões de Controle de Reprodução
+      // 3. Playback control buttons
       Row {
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: Style.space(12)
@@ -260,7 +264,7 @@ BarWidget {
         }
 
         Button {
-          text: root.isPlaying ? "⏸ Pausar" : "▶ Tocar"
+          text: root.isPlaying ? root.tr("⏸ Pausar", "⏸ Pause") : root.tr("▶ Tocar", "▶ Play")
           onClicked: root.runCommand("ytm-rs ctl toggle")
         }
 
@@ -275,7 +279,7 @@ BarWidget {
         }
       }
 
-      // 4. Controle de Volume
+      // 4. Volume control
       Row {
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: Style.space(12)
@@ -287,7 +291,7 @@ BarWidget {
 
         Text {
           anchors.verticalCenter: parent.verticalCenter
-          text: "Volume: " + root.volume + "%"
+          text: root.tr("Volume: ", "Volume: ") + root.volume + "%"
           color: root.bar ? root.bar.foreground : "#ffffff"
           font.pixelSize: Style.font.bodySmall
         }
@@ -298,14 +302,14 @@ BarWidget {
         }
       }
 
-      // 5. Botões de Ação da Janela
+      // 5. Window action buttons
       Row {
         width: parent.width
         spacing: Style.space(8)
 
         Button {
           width: (parent.width - Style.space(8)) / 2
-          text: "Focar Janela"
+          text: root.tr("Focar Janela", "Focus Window")
           onClicked: {
             root.popupOpen = false
             root.runCommand("ytm-rs ctl focus")
@@ -314,7 +318,7 @@ BarWidget {
 
         Button {
           width: (parent.width - Style.space(8)) / 2
-          text: "Parar"
+          text: root.tr("Parar", "Stop")
           onClicked: root.runCommand("ytm-rs ctl stop")
         }
       }

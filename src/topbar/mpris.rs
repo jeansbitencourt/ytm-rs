@@ -1,6 +1,8 @@
-use std::time::Duration;
 use anyhow::Result;
-use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig};
+use souvlaki::{
+    MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
+};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
@@ -64,16 +66,17 @@ impl MprisServer {
             None => return,
         };
 
-        let pos_dur = Duration::try_from_secs_f64(state.position_secs.max(0.0)).unwrap_or(Duration::ZERO);
+        let pos_dur =
+            Duration::try_from_secs_f64(state.position_secs.max(0.0)).unwrap_or(Duration::ZERO);
         let pos = MediaPosition(pos_dur);
 
         let playback = match state.status {
-            PlaybackStatus::Playing => {
-                MediaPlayback::Playing { progress: Some(pos) }
-            }
-            PlaybackStatus::Paused => {
-                MediaPlayback::Paused { progress: Some(pos) }
-            }
+            PlaybackStatus::Playing => MediaPlayback::Playing {
+                progress: Some(pos),
+            },
+            PlaybackStatus::Paused => MediaPlayback::Paused {
+                progress: Some(pos),
+            },
             PlaybackStatus::Stopped => MediaPlayback::Stopped,
             PlaybackStatus::Buffering => MediaPlayback::Paused { progress: None },
         };
@@ -132,7 +135,8 @@ mod tests {
         assert_eq!(pos_dur, Duration::ZERO);
 
         let valid_pos: f64 = 12.34;
-        let pos_dur_valid = Duration::try_from_secs_f64(valid_pos.max(0.0)).unwrap_or(Duration::ZERO);
+        let pos_dur_valid =
+            Duration::try_from_secs_f64(valid_pos.max(0.0)).unwrap_or(Duration::ZERO);
         assert_eq!(pos_dur_valid.as_secs(), 12);
     }
 }

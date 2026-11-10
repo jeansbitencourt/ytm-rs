@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::innertube::Track;
+use serde::{Deserialize, Serialize};
 
 pub mod daemon;
 pub mod mpv_ipc;

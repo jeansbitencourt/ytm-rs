@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use anyhow::Result;
 use ratatui::layout::Rect;
 use ratatui::widgets::ListState;
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
 
@@ -12,8 +12,11 @@ use crate::audio::daemon::send_daemon_command;
 use crate::audio::{DaemonCommand, DaemonResponse, PlayerState};
 use crate::cache::Database;
 use crate::config::AppConfig;
+use crate::i18n::{I18n, LanguagePreference};
 use crate::innertube::client::InnertubeClient;
-use crate::innertube::{AlbumSummary, ArtistSummary, PlaylistSummary, SearchFilter, Track, UserProfile};
+use crate::innertube::{
+    AlbumSummary, ArtistSummary, PlaylistSummary, SearchFilter, Track, UserProfile,
+};
 use crate::theme::Theme;
 use crate::ui::sidebar::{SidebarEntry, SidebarItem};
 
@@ -54,13 +57,17 @@ pub struct PlaylistLoadResult {
 
 #[derive(Debug, Clone)]
 pub enum OAuthProgress {
-    CodeReady { user_code: String, verification_url: String },
+    CodeReady {
+        user_code: String,
+        verification_url: String,
+    },
     TokenReady(crate::innertube::oauth::TokenResponse),
     Failed(String),
 }
 
 pub struct App {
     pub config: AppConfig,
+    pub i18n: I18n,
     pub theme: Theme,
     pub active_panel: ActivePanel,
     pub content_view: ContentView,
@@ -87,6 +94,8 @@ pub struct App {
     pub player_state: PlayerState,
     pub show_help: bool,
     pub show_auth_modal: bool,
+    pub show_language_modal: bool,
+    pub language_choice: LanguagePreference,
     pub auth_input: String,
     pub auth_message: Option<(String, bool)>,
     pub oauth_user_code: Option<String>,
@@ -126,8 +135,38 @@ pub struct App {
 }
 
 impl App {
+    pub fn localized_category_title(&self) -> String {
+        let title = self.active_category_title.as_str();
+        let exact = match title {
+            "Músicas Curtidas" => Some(self.i18n.t("library.liked")),
+            "Histórico Recente" => Some(self.i18n.t("library.history")),
+            "Fila / Rádio Atual" => Some(self.i18n.t("library.queue")),
+            _ => None,
+        };
+        if let Some(value) = exact {
+            return value;
+        }
+        let prefixes = [
+            ("Playlist: ", "category.playlist"),
+            ("Músicas: ", "category.tracks"),
+            ("Álbuns: ", "category.albums"),
+            ("Artistas: ", "category.artists"),
+            ("Álbum: ", "category.album"),
+            ("Artista: ", "category.artist"),
+            ("Rádio: ", "category.radio"),
+        ];
+        for (prefix, key) in prefixes {
+            if let Some(rest) = title.strip_prefix(prefix) {
+                return self.i18n.tf(key, [("name", rest)]);
+            }
+        }
+        title.to_string()
+    }
+
     pub async fn new(config: AppConfig) -> Result<Self> {
         let theme = Theme::load_omarchy();
+        let language_choice = config.settings.general.language;
+        let i18n = I18n::new(language_choice);
         let db_instance = Database::open(&config.db_file)?;
         let db = Arc::new(Mutex::new(db_instance));
 
@@ -177,7 +216,9 @@ impl App {
 
         let (active_sidebar_entry, displayed_tracks, active_category_title, sidebar_idx, track_idx) =
             if has_active_playback && !player_state.queue.is_empty() {
-                let q_idx = player_state.queue_index.min(player_state.queue.len().saturating_sub(1));
+                let q_idx = player_state
+                    .queue_index
+                    .min(player_state.queue.len().saturating_sub(1));
                 (
                     SidebarEntry::Fixed(SidebarItem::CurrentQueue),
                     player_state.queue.clone(),
@@ -222,6 +263,7 @@ impl App {
 
         let mut app = Self {
             config,
+            i18n,
             theme,
             active_panel: ActivePanel::Tracklist,
             content_view: ContentView::Tracks,
@@ -248,6 +290,8 @@ impl App {
             player_state,
             show_help: false,
             show_auth_modal: false,
+            show_language_modal: false,
+            language_choice,
             auth_input: String::new(),
             auth_message: None,
             oauth_user_code: None,
@@ -286,16 +330,18 @@ impl App {
             last_track_click: None,
         };
 
-        // Dispara a sincronização de conta em background se autenticado e se TTL de 24h expirou
-        // ou se ainda não temos playlists no cache
-        const SYNC_TTL_SECS: u64 = 86_400; // 24 horas
+        // Start background account sync when authenticated and the 24-hour TTL has expired
+        // or when no playlists are available in the cache yet
+        const SYNC_TTL_SECS: u64 = 86_400; // 24 hours
         let now_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
         let should_sync = match last_sync_ts {
-            Some(ts) => (now_ts.saturating_sub(ts) >= SYNC_TTL_SECS) || app.user_playlists.is_empty(),
+            Some(ts) => {
+                (now_ts.saturating_sub(ts) >= SYNC_TTL_SECS) || app.user_playlists.is_empty()
+            }
             None => true,
         };
 

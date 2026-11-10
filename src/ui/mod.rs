@@ -12,7 +12,7 @@ pub mod playerbar;
 pub mod sidebar;
 pub mod tracklist;
 
-pub use header::get_search_filter_button_at;
+pub use header::{get_search_filter_button_at, get_search_filter_button_at_for_language};
 
 pub fn render_ui(f: &mut Frame, app: &mut App) {
     let size = f.area();
@@ -68,6 +68,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         is_sidebar_focused,
         counts,
         &app.user_playlists,
+        &app.i18n,
     );
 
     render_cover_art(
@@ -77,20 +78,26 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         &mut app.cover_protocol,
         app.player_state.current_track.is_some(),
         app.picker.font_size,
+        &app.i18n,
     );
 
     let is_tracklist_focused = app.active_panel == ActivePanel::Tracklist;
-    let current_vid = app.player_state.current_track.as_ref().map(|t| t.video_id.as_str());
+    let current_vid = app
+        .player_state
+        .current_track
+        .as_ref()
+        .map(|t| t.video_id.as_str());
     let is_playing = app.player_state.status == crate::audio::PlaybackStatus::Playing;
     app.tracklist_area = content_chunks[1];
 
+    let category_title = app.localized_category_title();
     match app.content_view {
         ContentView::Tracks => {
             tracklist::render_tracklist(
                 f,
                 content_chunks[1],
                 &theme,
-                &app.active_category_title,
+                &category_title,
                 &app.displayed_tracks,
                 current_vid,
                 is_playing,
@@ -98,6 +105,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 is_tracklist_focused,
                 &mut app.thumb_protocols,
                 app.is_loading_tracks,
+                &app.i18n,
             );
         }
         ContentView::Albums => {
@@ -105,11 +113,12 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 f,
                 content_chunks[1],
                 &theme,
-                &app.active_category_title,
+                &category_title,
                 &app.search_results_albums,
                 &mut app.album_table_state,
                 is_tracklist_focused,
                 &mut app.thumb_protocols,
+                &app.i18n,
             );
         }
         ContentView::Artists => {
@@ -117,17 +126,18 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 f,
                 content_chunks[1],
                 &theme,
-                &app.active_category_title,
+                &category_title,
                 &app.search_results_artists,
                 &mut app.artist_table_state,
                 is_tracklist_focused,
                 &mut app.thumb_protocols,
+                &app.i18n,
             );
         }
     }
 
     // 3. Player Bar
-    playerbar::render_playerbar(f, main_chunks[2], &theme, &app.player_state);
+    playerbar::render_playerbar(f, main_chunks[2], &theme, &app.player_state, &app.i18n);
 
     // 4. Help Modal if toggled
     if app.show_help {
@@ -137,6 +147,10 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     // 5. Auth Modal if toggled
     if app.show_auth_modal {
         modals::render_auth_modal(f, size, app);
+    }
+
+    if app.show_language_modal {
+        modals::render_language_modal(f, size, app);
     }
 }
 
@@ -185,12 +199,13 @@ fn render_cover_art(
     cover_protocol: &mut Option<Box<dyn ratatui_image::protocol::StatefulProtocol>>,
     is_playing: bool,
     font_size: (u16, u16),
+    i18n: &crate::i18n::I18n,
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme.unfocused_border_style())
-        .title(Span::styled(" ♫ Capa em Reprodução ", theme.title_style()))
+        .title(Span::styled(i18n.t("cover.title"), theme.title_style()))
         .style(theme.default_block_style());
 
     let inner_area = block.inner(area);
@@ -210,7 +225,7 @@ fn render_cover_art(
         let placeholder = if is_playing {
             vec![
                 Line::from(""),
-                Line::from(Span::styled("⏳ Carregando capa...", theme.muted_style())),
+                Line::from(Span::styled(i18n.t("cover.loading"), theme.muted_style())),
             ]
         } else {
             vec![
@@ -227,8 +242,8 @@ fn render_cover_art(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::layout::Rect;
     use crate::innertube::SearchFilter;
+    use ratatui::layout::Rect;
 
     #[test]
     fn test_search_filter_button_hit_detection() {
@@ -237,14 +252,32 @@ mod tests {
         assert_eq!(get_search_filter_button_at(30, 3, search_area), None);
         assert_eq!(get_search_filter_button_at(10, 0, search_area), None);
 
-        assert_eq!(get_search_filter_button_at(28, 0, search_area), Some(SearchFilter::Tracks));
-        assert_eq!(get_search_filter_button_at(41, 0, search_area), Some(SearchFilter::Tracks));
+        assert_eq!(
+            get_search_filter_button_at(28, 0, search_area),
+            Some(SearchFilter::Tracks)
+        );
+        assert_eq!(
+            get_search_filter_button_at(41, 0, search_area),
+            Some(SearchFilter::Tracks)
+        );
 
-        assert_eq!(get_search_filter_button_at(42, 0, search_area), Some(SearchFilter::Albums));
-        assert_eq!(get_search_filter_button_at(53, 0, search_area), Some(SearchFilter::Albums));
+        assert_eq!(
+            get_search_filter_button_at(42, 0, search_area),
+            Some(SearchFilter::Albums)
+        );
+        assert_eq!(
+            get_search_filter_button_at(53, 0, search_area),
+            Some(SearchFilter::Albums)
+        );
 
-        assert_eq!(get_search_filter_button_at(54, 0, search_area), Some(SearchFilter::Artists));
-        assert_eq!(get_search_filter_button_at(68, 0, search_area), Some(SearchFilter::Artists));
+        assert_eq!(
+            get_search_filter_button_at(54, 0, search_area),
+            Some(SearchFilter::Artists)
+        );
+        assert_eq!(
+            get_search_filter_button_at(68, 0, search_area),
+            Some(SearchFilter::Artists)
+        );
 
         assert_eq!(get_search_filter_button_at(70, 0, search_area), None);
     }
@@ -269,7 +302,11 @@ mod tests {
         let w_px = target.width as f32 * font_size.0 as f32;
         let h_px = target.height as f32 * font_size.1 as f32;
         let ratio = w_px / h_px;
-        assert!((ratio - 1.0).abs() < 0.15, "image should be approximately square in pixels: {}", ratio);
+        assert!(
+            (ratio - 1.0).abs() < 0.15,
+            "image should be approximately square in pixels: {}",
+            ratio
+        );
     }
 
     #[test]
@@ -294,6 +331,9 @@ mod tests {
         }
 
         assert_eq!(compute_cover_art_rect(Rect::new(0, 0, 3, 3), (7, 16)), None);
-        assert_eq!(compute_cover_art_rect(Rect::new(0, 0, 10, 2), (7, 16)), None);
+        assert_eq!(
+            compute_cover_art_rect(Rect::new(0, 0, 10, 2), (7, 16)),
+            None
+        );
     }
 }

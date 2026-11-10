@@ -3,6 +3,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
+use crate::i18n::I18n;
 use crate::innertube::PlaylistSummary;
 use crate::theme::Theme;
 
@@ -20,11 +21,11 @@ impl SidebarItem {
         SidebarItem::CurrentQueue,
     ];
 
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self, i18n: &I18n) -> String {
         match self {
-            SidebarItem::LikedTracks => "♥ Músicas Curtidas",
-            SidebarItem::History => "🕒 Histórico Recente",
-            SidebarItem::CurrentQueue => "📻 Fila / Rádio Atual",
+            SidebarItem::LikedTracks => i18n.t("library.liked"),
+            SidebarItem::History => i18n.t("library.history"),
+            SidebarItem::CurrentQueue => i18n.t("library.queue"),
         }
     }
 }
@@ -57,6 +58,7 @@ pub fn render_sidebar(
     is_focused: bool,
     counts: (usize, usize, usize),
     playlists: &[PlaylistSummary],
+    i18n: &I18n,
 ) {
     let border_style = if is_focused {
         theme.focused_border_style()
@@ -65,9 +67,9 @@ pub fn render_sidebar(
     };
 
     let title_text = if playlists.is_empty() {
-        " Biblioteca [1] "
+        i18n.t("library.title")
     } else {
-        " Biblioteca & Playlists [1] "
+        i18n.t("library.playlists_title")
     };
 
     let title = Span::styled(title_text, theme.title_style());
@@ -88,7 +90,7 @@ pub fn render_sidebar(
         .map(|(i, item)| {
             let count_str = format!(" ({})", counts_arr[i]);
             let line = Line::from(vec![
-                Span::styled(item.label(), theme.text_style()),
+                Span::styled(item.label(i18n), theme.text_style()),
                 Span::styled(count_str, theme.muted_style()),
             ]);
             ListItem::new(line)

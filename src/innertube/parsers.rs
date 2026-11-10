@@ -43,7 +43,16 @@ pub fn is_category_label(s: &str) -> bool {
     let lower = s.trim().to_lowercase();
     matches!(
         lower.as_str(),
-        "música" | "musica" | "vídeo" | "video" | "canção" | "faixa" | "song" | "track" | "single" | "ep"
+        "música"
+            | "musica"
+            | "vídeo"
+            | "video"
+            | "canção"
+            | "faixa"
+            | "song"
+            | "track"
+            | "single"
+            | "ep"
     )
 }
 
@@ -88,15 +97,24 @@ pub fn parse_music_responsive_item(renderer: &Value) -> Option<Track> {
         return None;
     }
 
-    let title_runs = flex_columns[0].pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")?.as_array()?;
-    let title = title_runs.iter().map(|r| r.get("text").and_then(|t| t.as_str()).unwrap_or("")).collect::<Vec<_>>().join("");
+    let title_runs = flex_columns[0]
+        .pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")?
+        .as_array()?;
+    let title = title_runs
+        .iter()
+        .map(|r| r.get("text").and_then(|t| t.as_str()).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("");
 
     let mut artist = "Artista Desconhecido".to_string();
     let mut album = "".to_string();
     let mut duration_secs = 0;
 
     for col in &flex_columns[1..] {
-        if let Some(runs) = col.pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs").and_then(|r| r.as_array()) {
+        if let Some(runs) = col
+            .pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")
+            .and_then(|r| r.as_array())
+        {
             for r in runs {
                 let text = r.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
                 if text.is_empty() || text == "•" {
@@ -135,8 +153,11 @@ pub fn parse_music_responsive_item(renderer: &Value) -> Option<Track> {
     if duration_secs == 0 {
         if let Some(fixed_cols) = renderer.get("fixedColumns").and_then(|f| f.as_array()) {
             for col in fixed_cols {
-                if let Some(dur_text) = col.pointer("/musicResponsiveListItemFixedColumnRenderer/text/runs/0/text")
-                    .or_else(|| col.pointer("/musicResponsiveListItemFixedColumnRenderer/text/simpleText"))
+                if let Some(dur_text) = col
+                    .pointer("/musicResponsiveListItemFixedColumnRenderer/text/runs/0/text")
+                    .or_else(|| {
+                        col.pointer("/musicResponsiveListItemFixedColumnRenderer/text/simpleText")
+                    })
                     .and_then(|t| t.as_str())
                 {
                     let d = parse_duration_to_secs(dur_text);
@@ -158,7 +179,14 @@ pub fn parse_music_responsive_item(renderer: &Value) -> Option<Track> {
         .unwrap_or("")
         .to_string();
 
-    Some(Track::new(video_id, title, artist, album, duration_secs, thumbnail_url))
+    Some(Track::new(
+        video_id,
+        title,
+        artist,
+        album,
+        duration_secs,
+        thumbnail_url,
+    ))
 }
 
 pub fn parse_radio_results(val: &Value) -> Vec<Track> {
@@ -181,13 +209,20 @@ pub fn parse_radio_results(val: &Value) -> Vec<Track> {
 
 pub fn parse_playlist_panel_video(renderer: &Value) -> Option<Track> {
     let video_id = renderer.get("videoId")?.as_str()?.to_string();
-    let title = renderer.pointer("/title/runs/0/text")?.as_str()?.to_string();
+    let title = renderer
+        .pointer("/title/runs/0/text")?
+        .as_str()?
+        .to_string();
 
     let mut artist = "Artista Desconhecido".to_string();
     let mut album = "".to_string();
     let mut duration_secs = 0;
 
-    if let Some(runs) = renderer.pointer("/longBylineText/runs").or_else(|| renderer.pointer("/shortBylineText/runs")).and_then(|r| r.as_array()) {
+    if let Some(runs) = renderer
+        .pointer("/longBylineText/runs")
+        .or_else(|| renderer.pointer("/shortBylineText/runs"))
+        .and_then(|r| r.as_array())
+    {
         for r in runs {
             let text = r.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
             if text.is_empty() || text == "•" {
@@ -222,7 +257,8 @@ pub fn parse_playlist_panel_video(renderer: &Value) -> Option<Track> {
     }
 
     if duration_secs == 0 {
-        if let Some(dur_text) = renderer.pointer("/lengthText/runs/0/text")
+        if let Some(dur_text) = renderer
+            .pointer("/lengthText/runs/0/text")
             .or_else(|| renderer.pointer("/lengthText/simpleText"))
             .and_then(|t| t.as_str())
         {
@@ -239,7 +275,14 @@ pub fn parse_playlist_panel_video(renderer: &Value) -> Option<Track> {
         .unwrap_or("")
         .to_string();
 
-    Some(Track::new(video_id, title, artist, album, duration_secs, thumbnail_url))
+    Some(Track::new(
+        video_id,
+        title,
+        artist,
+        album,
+        duration_secs,
+        thumbnail_url,
+    ))
 }
 
 pub fn parse_playlist_results(val: &Value) -> Vec<Track> {
@@ -360,7 +403,10 @@ pub fn parse_continuation_response(val: &Value) -> (Vec<Track>, Option<String>) 
                 }
             }
         }
-        if let Some(tok) = gc.pointer("/continuations/0/nextContinuationData/continuation").and_then(|v| v.as_str()) {
+        if let Some(tok) = gc
+            .pointer("/continuations/0/nextContinuationData/continuation")
+            .and_then(|v| v.as_str())
+        {
             next_token = Some(tok.to_string());
         }
         return (tracks, next_token);
@@ -377,14 +423,18 @@ pub fn parse_continuation_response(val: &Value) -> (Vec<Track>, Option<String>) 
                 }
             }
         }
-        if let Some(tok) = pvlc.pointer("/continuations/0/nextContinuationData/continuation").and_then(|v| v.as_str()) {
+        if let Some(tok) = pvlc
+            .pointer("/continuations/0/nextContinuationData/continuation")
+            .and_then(|v| v.as_str())
+        {
             next_token = Some(tok.to_string());
         }
         return (tracks, next_token);
     }
 
     // 3. Web remix continuationContents (musicPlaylistShelfContinuation or musicShelfContinuation)
-    let shelf_cont = val.pointer("/continuationContents/musicPlaylistShelfContinuation")
+    let shelf_cont = val
+        .pointer("/continuationContents/musicPlaylistShelfContinuation")
         .or_else(|| val.pointer("/continuationContents/musicShelfContinuation"))
         .or_else(|| val.pointer("/continuationContents/sectionListContinuation"));
 
@@ -398,20 +448,29 @@ pub fn parse_continuation_response(val: &Value) -> (Vec<Track>, Option<String>) 
                 }
             }
         }
-        if let Some(tok) = sc.pointer("/continuations/0/nextContinuationData/continuation").and_then(|v| v.as_str()) {
+        if let Some(tok) = sc
+            .pointer("/continuations/0/nextContinuationData/continuation")
+            .and_then(|v| v.as_str())
+        {
             next_token = Some(tok.to_string());
         }
         return (tracks, next_token);
     }
 
     // 4. Web remix appendContinuationItemsAction
-    if let Some(items) = val.pointer("/onResponseReceivedActions/0/appendContinuationItemsAction/continuationItems").and_then(|v| v.as_array()) {
+    if let Some(items) = val
+        .pointer("/onResponseReceivedActions/0/appendContinuationItemsAction/continuationItems")
+        .and_then(|v| v.as_array())
+    {
         for item in items {
             if let Some(renderer) = item.get("musicResponsiveListItemRenderer") {
                 if let Some(track) = parse_music_responsive_item(renderer) {
                     tracks.push(track);
                 }
-            } else if let Some(tok) = item.pointer("/continuationItemRenderer/continuationEndpoint/continuationCommand/token").and_then(|v| v.as_str()) {
+            } else if let Some(tok) = item
+                .pointer("/continuationItemRenderer/continuationEndpoint/continuationCommand/token")
+                .and_then(|v| v.as_str())
+            {
                 next_token = Some(tok.to_string());
             }
         }
@@ -464,20 +523,38 @@ pub fn parse_album_item(renderer: &Value) -> Option<AlbumSummary> {
         return None;
     }
 
-    let title_runs = flex_columns[0].pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")?.as_array()?;
-    let title = title_runs.iter().map(|r| r.get("text").and_then(|t| t.as_str()).unwrap_or("")).collect::<Vec<_>>().join("");
+    let title_runs = flex_columns[0]
+        .pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")?
+        .as_array()?;
+    let title = title_runs
+        .iter()
+        .map(|r| r.get("text").and_then(|t| t.as_str()).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("");
 
     let mut artist = "Artista Desconhecido".to_string();
     let mut year = "".to_string();
 
     if flex_columns.len() > 1 {
-        if let Some(subtitle_runs) = flex_columns[1].pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs").and_then(|r| r.as_array()) {
-            let texts: Vec<&str> = subtitle_runs.iter().filter_map(|r| r.get("text").and_then(|t| t.as_str())).filter(|t| *t != " • ").collect();
+        if let Some(subtitle_runs) = flex_columns[1]
+            .pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")
+            .and_then(|r| r.as_array())
+        {
+            let texts: Vec<&str> = subtitle_runs
+                .iter()
+                .filter_map(|r| r.get("text").and_then(|t| t.as_str()))
+                .filter(|t| *t != " • ")
+                .collect();
             for t in &texts {
                 let s = t.trim();
                 if s.chars().all(|c| c.is_ascii_digit()) && s.len() == 4 {
                     year = s.to_string();
-                } else if s != "Álbum" && s != "Album" && s != "Single" && s != "EP" && (artist == "Artista Desconhecido" || artist.is_empty()) {
+                } else if s != "Álbum"
+                    && s != "Album"
+                    && s != "Single"
+                    && s != "EP"
+                    && (artist == "Artista Desconhecido" || artist.is_empty())
+                {
                     artist = s.to_string();
                 }
             }
@@ -542,13 +619,26 @@ pub fn parse_artist_item(renderer: &Value) -> Option<ArtistSummary> {
         return None;
     }
 
-    let name_runs = flex_columns[0].pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")?.as_array()?;
-    let name = name_runs.iter().map(|r| r.get("text").and_then(|t| t.as_str()).unwrap_or("")).collect::<Vec<_>>().join("");
+    let name_runs = flex_columns[0]
+        .pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")?
+        .as_array()?;
+    let name = name_runs
+        .iter()
+        .map(|r| r.get("text").and_then(|t| t.as_str()).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("");
 
     let mut subscribers_text = "".to_string();
     if flex_columns.len() > 1 {
-        if let Some(subtitle_runs) = flex_columns[1].pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs").and_then(|r| r.as_array()) {
-            let texts: Vec<&str> = subtitle_runs.iter().filter_map(|r| r.get("text").and_then(|t| t.as_str())).filter(|t| *t != " • ").collect();
+        if let Some(subtitle_runs) = flex_columns[1]
+            .pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")
+            .and_then(|r| r.as_array())
+        {
+            let texts: Vec<&str> = subtitle_runs
+                .iter()
+                .filter_map(|r| r.get("text").and_then(|t| t.as_str()))
+                .filter(|t| *t != " • ")
+                .collect();
             if texts.len() > 1 {
                 subscribers_text = texts[1].to_string();
             } else if !texts.is_empty() {
@@ -585,7 +675,10 @@ pub fn parse_album_browse_tracks(val: &Value) -> (String, Vec<Track>) {
         .to_string();
 
     let album_artist = header
-        .and_then(|h| h.pointer("/straplineTextOne/runs/0/text").or_else(|| h.pointer("/subtitle/runs/0/text")))
+        .and_then(|h| {
+            h.pointer("/straplineTextOne/runs/0/text")
+                .or_else(|| h.pointer("/subtitle/runs/0/text"))
+        })
         .and_then(|t| t.as_str())
         .unwrap_or("Artista Desconhecido")
         .to_string();
@@ -744,11 +837,20 @@ pub fn parse_library_playlists(val: &Value) -> Vec<PlaylistSummary> {
 
     if let Some(sections) = items_array.and_then(|v| v.as_array()) {
         for sec in sections {
-            if let Some(items) = sec.pointer("/gridRenderer/items").and_then(|v| v.as_array()) {
+            if let Some(items) = sec
+                .pointer("/gridRenderer/items")
+                .and_then(|v| v.as_array())
+            {
                 raw_items.extend(items.clone());
-            } else if let Some(items) = sec.pointer("/itemSectionRenderer/contents/0/gridRenderer/items").and_then(|v| v.as_array()) {
+            } else if let Some(items) = sec
+                .pointer("/itemSectionRenderer/contents/0/gridRenderer/items")
+                .and_then(|v| v.as_array())
+            {
                 raw_items.extend(items.clone());
-            } else if let Some(items) = sec.pointer("/musicShelfRenderer/contents").and_then(|v| v.as_array()) {
+            } else if let Some(items) = sec
+                .pointer("/musicShelfRenderer/contents")
+                .and_then(|v| v.as_array())
+            {
                 raw_items.extend(items.clone());
             }
         }
@@ -764,13 +866,19 @@ pub fn parse_library_playlists(val: &Value) -> Vec<PlaylistSummary> {
     for item in raw_items {
         if let Some(two_row) = item.get("musicTwoRowItemRenderer") {
             if let Some(playlist) = parse_two_row_playlist(two_row) {
-                if playlist.id != "VLLM" && playlist.id != "FEmusic_liked_videos" && !playlist.id.is_empty() {
+                if playlist.id != "VLLM"
+                    && playlist.id != "FEmusic_liked_videos"
+                    && !playlist.id.is_empty()
+                {
                     playlists.push(playlist);
                 }
             }
         } else if let Some(resp_item) = item.get("musicResponsiveListItemRenderer") {
             if let Some(playlist) = parse_responsive_playlist(resp_item) {
-                if playlist.id != "VLLM" && playlist.id != "FEmusic_liked_videos" && !playlist.id.is_empty() {
+                if playlist.id != "VLLM"
+                    && playlist.id != "FEmusic_liked_videos"
+                    && !playlist.id.is_empty()
+                {
                     playlists.push(playlist);
                 }
             }
@@ -793,21 +901,30 @@ fn parse_two_row_playlist(renderer: &Value) -> Option<PlaylistSummary> {
         .to_string();
 
     // Skip "New playlist" button/renderer
-    if title.to_lowercase().contains("nova playlist") || title.to_lowercase().contains("new playlist") {
+    if title.to_lowercase().contains("nova playlist")
+        || title.to_lowercase().contains("new playlist")
+    {
         return None;
     }
 
     let mut subtitle = String::new();
     let mut count_text = String::new();
 
-    if let Some(runs) = renderer.pointer("/subtitle/runs").and_then(|v| v.as_array()) {
+    if let Some(runs) = renderer
+        .pointer("/subtitle/runs")
+        .and_then(|v| v.as_array())
+    {
         for r in runs {
             if let Some(text) = r.get("text").and_then(|t| t.as_str()) {
                 let s = text.trim();
                 if s.is_empty() || s == "•" {
                     continue;
                 }
-                if s.contains("música") || s.contains("song") || s.contains("faixa") || s.chars().all(|c| c.is_ascii_digit()) {
+                if s.contains("música")
+                    || s.contains("song")
+                    || s.contains("faixa")
+                    || s.chars().all(|c| c.is_ascii_digit())
+                {
                     count_text = s.to_string();
                 } else if subtitle.is_empty() {
                     subtitle = s.to_string();
@@ -846,10 +963,18 @@ fn parse_responsive_playlist(renderer: &Value) -> Option<PlaylistSummary> {
         return None;
     }
 
-    let title_runs = flex_columns[0].pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")?.as_array()?;
-    let title = title_runs.iter().map(|r| r.get("text").and_then(|t| t.as_str()).unwrap_or("")).collect::<Vec<_>>().join("");
+    let title_runs = flex_columns[0]
+        .pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")?
+        .as_array()?;
+    let title = title_runs
+        .iter()
+        .map(|r| r.get("text").and_then(|t| t.as_str()).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("");
 
-    if title.to_lowercase().contains("nova playlist") || title.to_lowercase().contains("new playlist") {
+    if title.to_lowercase().contains("nova playlist")
+        || title.to_lowercase().contains("new playlist")
+    {
         return None;
     }
 
@@ -857,14 +982,21 @@ fn parse_responsive_playlist(renderer: &Value) -> Option<PlaylistSummary> {
     let mut count_text = String::new();
 
     if flex_columns.len() > 1 {
-        if let Some(runs) = flex_columns[1].pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs").and_then(|v| v.as_array()) {
+        if let Some(runs) = flex_columns[1]
+            .pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")
+            .and_then(|v| v.as_array())
+        {
             for r in runs {
                 if let Some(text) = r.get("text").and_then(|t| t.as_str()) {
                     let s = text.trim();
                     if s.is_empty() || s == "•" {
                         continue;
                     }
-                    if s.contains("música") || s.contains("song") || s.contains("faixa") || s.chars().all(|c| c.is_ascii_digit()) {
+                    if s.contains("música")
+                        || s.contains("song")
+                        || s.contains("faixa")
+                        || s.chars().all(|c| c.is_ascii_digit())
+                    {
                         count_text = s.to_string();
                     } else if subtitle.is_empty() {
                         subtitle = s.to_string();
@@ -922,18 +1054,33 @@ pub fn parse_tv_tile_playlist(tile: &Value) -> Option<PlaylistSummary> {
 
     let mut count_text = String::new();
 
-    if let Some(lines) = tile.pointer("/metadata/tileMetadataRenderer/lines").and_then(|v| v.as_array()) {
+    if let Some(lines) = tile
+        .pointer("/metadata/tileMetadataRenderer/lines")
+        .and_then(|v| v.as_array())
+    {
         for line in lines {
-            if let Some(items) = line.pointer("/lineRenderer/items").and_then(|v| v.as_array()) {
+            if let Some(items) = line
+                .pointer("/lineRenderer/items")
+                .and_then(|v| v.as_array())
+            {
                 for item in items {
-                    let txt = item.pointer("/lineItemRenderer/text/simpleText")
+                    let txt = item
+                        .pointer("/lineItemRenderer/text/simpleText")
                         .or_else(|| item.pointer("/lineItemRenderer/text/runs/0/text"))
                         .and_then(|t| t.as_str())
                         .unwrap_or("");
                     let lower = txt.to_lowercase();
-                    if lower.contains("track") || lower.contains("song") || lower.contains("faixa") || lower.contains("música") || lower.contains("musica") {
+                    if lower.contains("track")
+                        || lower.contains("song")
+                        || lower.contains("faixa")
+                        || lower.contains("música")
+                        || lower.contains("musica")
+                    {
                         count_text = txt.to_string();
-                    } else if subtitle.is_empty() && !lower.contains("playlist") && !lower.contains("auto playlist") {
+                    } else if subtitle.is_empty()
+                        && !lower.contains("playlist")
+                        && !lower.contains("auto playlist")
+                    {
                         subtitle = txt.to_string();
                     }
                 }
@@ -981,17 +1128,29 @@ pub fn parse_tv_tile_track(tile: &Value) -> Option<Track> {
     let mut artist = "Artista Desconhecido".to_string();
     let mut album = String::new();
 
-    if let Some(lines) = tile.pointer("/metadata/tileMetadataRenderer/lines").and_then(|v| v.as_array()) {
+    if let Some(lines) = tile
+        .pointer("/metadata/tileMetadataRenderer/lines")
+        .and_then(|v| v.as_array())
+    {
         for (i, line) in lines.iter().enumerate() {
-            if let Some(items) = line.pointer("/lineRenderer/items").and_then(|v| v.as_array()) {
+            if let Some(items) = line
+                .pointer("/lineRenderer/items")
+                .and_then(|v| v.as_array())
+            {
                 for item in items {
-                    let txt = item.pointer("/lineItemRenderer/text/simpleText")
+                    let txt = item
+                        .pointer("/lineItemRenderer/text/simpleText")
                         .or_else(|| item.pointer("/lineItemRenderer/text/runs/0/text"))
                         .and_then(|t| t.as_str())
                         .unwrap_or("");
                     if i == 0 && !txt.is_empty() {
                         artist = txt.to_string();
-                    } else if i > 0 && !is_view_count(txt) && !is_category_label(txt) && !is_duration_str(txt) && !txt.is_empty() {
+                    } else if i > 0
+                        && !is_view_count(txt)
+                        && !is_category_label(txt)
+                        && !is_duration_str(txt)
+                        && !txt.is_empty()
+                    {
                         if album.is_empty() {
                             album = txt.to_string();
                         }
@@ -1002,7 +1161,8 @@ pub fn parse_tv_tile_track(tile: &Value) -> Option<Track> {
     }
 
     if artist == "Artista Desconhecido" {
-        if let Some(sub) = tile.pointer("/onLongPressCommand/showMenuCommand/subtitle/simpleText")
+        if let Some(sub) = tile
+            .pointer("/onLongPressCommand/showMenuCommand/subtitle/simpleText")
             .or_else(|| tile.pointer("/onLongPressCommand/showMenuCommand/subtitle/runs/0/text"))
             .and_then(|t| t.as_str())
         {
@@ -1013,9 +1173,13 @@ pub fn parse_tv_tile_track(tile: &Value) -> Option<Track> {
     }
 
     let mut duration_secs = 0;
-    if let Some(overlays) = tile.pointer("/header/tileHeaderRenderer/thumbnailOverlays").and_then(|v| v.as_array()) {
+    if let Some(overlays) = tile
+        .pointer("/header/tileHeaderRenderer/thumbnailOverlays")
+        .and_then(|v| v.as_array())
+    {
         for ov in overlays {
-            if let Some(dur_str) = ov.pointer("/thumbnailOverlayTimeStatusRenderer/text/simpleText")
+            if let Some(dur_str) = ov
+                .pointer("/thumbnailOverlayTimeStatusRenderer/text/simpleText")
                 .or_else(|| ov.pointer("/thumbnailOverlayTimeStatusRenderer/text/runs/0/text"))
                 .and_then(|t| t.as_str())
             {
@@ -1038,7 +1202,14 @@ pub fn parse_tv_tile_track(tile: &Value) -> Option<Track> {
         .unwrap_or("")
         .to_string();
 
-    Some(Track::new(video_id, title, artist, album, duration_secs, thumbnail_url))
+    Some(Track::new(
+        video_id,
+        title,
+        artist,
+        album,
+        duration_secs,
+        thumbnail_url,
+    ))
 }
 
 #[cfg(test)]
@@ -1087,7 +1258,10 @@ mod tests {
         let profile = parse_user_profile(&raw).expect("profile should parse");
         assert_eq!(profile.name, "Jean Bitencourt");
         assert_eq!(profile.handle, "@jeanbitencourt");
-        assert_eq!(profile.avatar_url, "https://lh3.googleusercontent.com/avatar_large.jpg");
+        assert_eq!(
+            profile.avatar_url,
+            "https://lh3.googleusercontent.com/avatar_large.jpg"
+        );
     }
 
     #[test]
@@ -1153,7 +1327,10 @@ mod tests {
         assert_eq!(playlists[0].title, "Synthwave & Retrowave");
         assert_eq!(playlists[0].subtitle, "Playlist");
         assert_eq!(playlists[0].count_text, "45 músicas");
-        assert_eq!(playlists[0].thumbnail_url, "https://lh3.googleusercontent.com/pl_thumb.jpg");
+        assert_eq!(
+            playlists[0].thumbnail_url,
+            "https://lh3.googleusercontent.com/pl_thumb.jpg"
+        );
     }
 
     #[test]
@@ -1272,7 +1449,10 @@ mod tests {
         assert_eq!(playlists[0].title, "Rock Classics");
         assert_eq!(playlists[0].subtitle, "Jean Bitencourt");
         assert_eq!(playlists[0].count_text, "Playlist • 50 tracks");
-        assert_eq!(playlists[0].thumbnail_url, "https://yt3.ggpht.com/rock_thumb.jpg");
+        assert_eq!(
+            playlists[0].thumbnail_url,
+            "https://yt3.ggpht.com/rock_thumb.jpg"
+        );
     }
 
     #[test]
@@ -1324,7 +1504,10 @@ mod tests {
         assert_eq!(track.artist, "Iron Maiden");
         assert_eq!(track.album, "Piece of Mind");
         assert_eq!(track.duration_secs, 251);
-        assert_eq!(track.thumbnail_url, "https://i.ytimg.com/vi/track12345/hqdefault.jpg");
+        assert_eq!(
+            track.thumbnail_url,
+            "https://i.ytimg.com/vi/track12345/hqdefault.jpg"
+        );
     }
 
     #[test]
@@ -1425,7 +1608,10 @@ mod tests {
         assert_eq!(album.title, "Random Access Memories");
         assert_eq!(album.artist, "Daft Punk");
         assert_eq!(album.year, "2013");
-        assert_eq!(album.thumbnail_url, "https://lh3.googleusercontent.com/album.jpg");
+        assert_eq!(
+            album.thumbnail_url,
+            "https://lh3.googleusercontent.com/album.jpg"
+        );
     }
 
     #[test]
@@ -1473,7 +1659,10 @@ mod tests {
         assert_eq!(artist.browse_id, "UC_artist_123");
         assert_eq!(artist.name, "Daft Punk");
         assert_eq!(artist.subscribers_text, "68,3 mi ouvintes mensais");
-        assert_eq!(artist.thumbnail_url, "https://lh3.googleusercontent.com/artist.jpg");
+        assert_eq!(
+            artist.thumbnail_url,
+            "https://lh3.googleusercontent.com/artist.jpg"
+        );
     }
 
     #[test]
@@ -1566,7 +1755,10 @@ mod tests {
             }
         });
 
-        assert_eq!(extract_browse_continuation_token(&raw_browse), Some("token_page_2".to_string()));
+        assert_eq!(
+            extract_browse_continuation_token(&raw_browse),
+            Some("token_page_2".to_string())
+        );
 
         let raw_continuation = json!({
             "continuationContents": {

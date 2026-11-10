@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawThemeColors {
@@ -74,8 +74,14 @@ impl Theme {
     pub fn load_omarchy() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let candidate_paths = [
-            (home.join(".local/state/omarchy/current/theme/colors.toml"), "Omarchy Live Theme"),
-            (home.join(".config/omarchy/current/theme/colors.toml"), "Omarchy Config Theme"),
+            (
+                home.join(".local/state/omarchy/current/theme/colors.toml"),
+                "Omarchy Live Theme",
+            ),
+            (
+                home.join(".config/omarchy/current/theme/colors.toml"),
+                "Omarchy Config Theme",
+            ),
             (home.join(".config/ytm-rs/theme.toml"), "Custom User Theme"),
             (home.join(".config/ytm-rs/colors.toml"), "Custom User Theme"),
         ];
@@ -147,7 +153,9 @@ impl Theme {
     }
 
     pub fn focused_border_style(&self) -> Style {
-        Style::default().fg(self.accent).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(self.accent)
+            .add_modifier(Modifier::BOLD)
     }
 
     pub fn unfocused_border_style(&self) -> Style {
@@ -162,7 +170,9 @@ impl Theme {
     }
 
     pub fn title_style(&self) -> Style {
-        Style::default().fg(self.accent).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(self.accent)
+            .add_modifier(Modifier::BOLD)
     }
 
     pub fn text_style(&self) -> Style {
@@ -215,7 +225,8 @@ impl ThemeWatcher {
                 }
             },
             Config::default(),
-        ).ok()?;
+        )
+        .ok()?;
 
         let _ = watcher.watch(&target_dir, RecursiveMode::Recursive);
 
@@ -261,6 +272,9 @@ mod tests {
         "##;
         let raw: RawThemeColors = toml::from_str(toml_data).unwrap();
         assert_eq!(raw.name, Some("Nord Test".to_string()));
-        assert_eq!(parse_hex_color(raw.accent.unwrap().as_str()), Some(Color::Rgb(136, 192, 208)));
+        assert_eq!(
+            parse_hex_color(raw.accent.unwrap().as_str()),
+            Some(Color::Rgb(136, 192, 208))
+        );
     }
 }

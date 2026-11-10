@@ -5,6 +5,66 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::i18n::LanguagePreference;
+
+fn text(app: &App, key: &str) -> String {
+    app.i18n.t(key)
+}
+
+pub fn render_language_modal(f: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+    let width = 48.min(area.width.saturating_sub(4));
+    let height = 10.min(area.height.saturating_sub(2));
+    let modal_area = Rect::new(
+        (area.width.saturating_sub(width)) / 2,
+        (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    f.render_widget(Clear, modal_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme.focused_border_style())
+        .title(Span::styled(
+            app.i18n.t("settings.title"),
+            theme.title_style(),
+        ))
+        .style(theme.default_block_style());
+
+    let choices = [
+        LanguagePreference::Auto,
+        LanguagePreference::PtBr,
+        LanguagePreference::En,
+    ];
+    let mut lines = Vec::with_capacity(choices.len() + 2);
+    for choice in choices {
+        let marker = if choice == app.language_choice {
+            "●"
+        } else {
+            "○"
+        };
+        let label = app.i18n.language_label(choice);
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", marker),
+                if choice == app.language_choice {
+                    theme.accent_style()
+                } else {
+                    theme.muted_style()
+                },
+            ),
+            Span::styled(label, theme.text_style()),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        app.i18n.t("settings.apply"),
+        theme.muted_style(),
+    )));
+    f.render_widget(Paragraph::new(lines).block(block), modal_area);
+}
 
 pub fn render_help_modal(f: &mut Frame, area: Rect, app: &App) {
     let theme = &app.theme;
@@ -23,44 +83,48 @@ pub fn render_help_modal(f: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme.focused_border_style())
-        .title(Span::styled(" Mapa de Atalhos e Teclado (YTM-RS) ", theme.title_style()))
+        .title(Span::styled(app.i18n.t("help.title"), theme.title_style()))
         .style(theme.default_block_style());
 
     let shortcuts = [
-        ("Navegação & Busca:", ""),
-        ("  h, j, k, l / Setas", "Navegar entre painéis e rolar listas"),
-        ("  1 / 2 / /", "Focar Biblioteca [1], Painel Principal [2] ou Busca [/]"),
-        ("  Tab / Shift+Tab", "Alternar filtro de busca (Músicas / Álbuns / Artistas)"),
-        ("  Enter", "Reproduzir faixa ou abrir álbum / artista"),
-        ("  Backspace / Esc", "Voltar à lista anterior / Sair da busca"),
+        ("help.navigation_title", ""),
+        ("help.nav_keys", "help.nav_desc"),
+        ("help.focus_keys", "help.focus_desc"),
+        ("help.filter_keys", "help.filter_desc"),
+        ("help.open_keys", "help.open_desc"),
+        ("help.back_keys", "help.back_desc"),
         ("", ""),
-        ("Controles de Reprodução:", ""),
-        ("  Space", "Alternar Reproduzir / Pausar (Play / Pause)"),
-        ("  p", "Tocar álbum/artista completo de uma vez (ou faixa anterior)"),
-        ("  n / p (< / >)", "Próxima faixa / Faixa anterior"),
-        ("  + / -", "Aumentar / Diminuir volume (±5%)"),
-        ("  f", "Favoritar música atual (Like)"),
-        ("  s", "Alternar modo Aleatório (Shuffle ON/OFF) na fila"),
-        ("  a", "Adicionar item selecionado (faixa/álbum/artista) à fila"),
-        ("  r", "Iniciar Rádio Infinita a partir da faixa selecionada"),
-        ("  F5 / Ctrl+R", "Sincronizar e recarregar biblioteca com YouTube"),
+        ("help.playback_title", ""),
+        ("help.space_keys", "help.space_desc"),
+        ("help.album_keys", "help.album_desc"),
+        ("help.next_keys", "help.next_desc"),
+        ("help.volume_keys", "help.volume_desc"),
+        ("help.like_keys", "help.like_desc"),
+        ("help.shuffle_keys", "help.shuffle_desc"),
+        ("help.queue_keys", "help.queue_desc"),
+        ("help.radio_keys", "help.radio_desc"),
+        ("help.sync_keys", "help.sync_desc"),
         ("", ""),
-        ("Controles de Janela & Sistema:", ""),
-        ("  c / C", "Gerenciar Conta / Autenticação (Cookie YTM)"),
-        ("  q", "Esconder janela TUI (continua tocando em segundo plano)"),
-        ("  Q / Ctrl+Q", "Encerrar aplicativo e daemon de áudio"),
-        ("  ?", "Abrir / Fechar este menu de ajuda"),
+        ("help.window_title", ""),
+        ("help.account_keys", "help.account_desc"),
+        ("help.hide_keys", "help.hide_desc"),
+        ("help.quit_keys", "help.quit_desc"),
+        ("help.language_keys", "help.language_desc"),
+        ("help.help_keys", "help.help_desc"),
     ];
 
     let lines: Vec<Line> = shortcuts
         .iter()
         .map(|(key, desc)| {
             if desc.is_empty() {
-                Line::from(Span::styled(*key, theme.title_style()))
+                Line::from(Span::styled(text(app, key), theme.title_style()))
             } else {
                 Line::from(vec![
-                    Span::styled(format!("{:<24}", key), theme.accent_style().add_modifier(Modifier::BOLD)),
-                    Span::styled(*desc, theme.text_style()),
+                    Span::styled(
+                        format!("{:<24}", text(app, key)),
+                        theme.accent_style().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(text(app, desc), theme.text_style()),
                 ])
             }
         })
@@ -86,7 +150,7 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme.focused_border_style())
-        .title(Span::styled(" Autenticação YouTube Music (Conta Google) ", theme.title_style()))
+        .title(Span::styled(app.i18n.t("auth.title"), theme.title_style()))
         .style(theme.default_block_style());
 
     let inner_area = block.inner(modal_area);
@@ -112,80 +176,130 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
                 format!("── {}", prof.name)
             };
             let auth_type = if app.auth.has_oauth() {
-                "✓ Conectado via Google OAuth "
+                text(app, "auth.connected_oauth")
             } else {
-                "✓ Conectado ao YouTube Music "
+                text(app, "auth.connected_cookie")
             };
             Line::from(vec![
-                Span::styled("Status da Conta: ", theme.title_style()),
-                Span::styled(auth_type, theme.playing_indicator_style().add_modifier(Modifier::BOLD)),
+                Span::styled(app.i18n.t("auth.status"), theme.title_style()),
+                Span::styled(
+                    auth_type,
+                    theme.playing_indicator_style().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(handle_disp, theme.text_style()),
             ])
         } else if app.is_syncing_account {
             Line::from(vec![
-                Span::styled("Status da Conta: ", theme.title_style()),
-                Span::styled("⏳ Sincronizando dados com o Google...", theme.accent_style().add_modifier(Modifier::BOLD)),
+                Span::styled(app.i18n.t("auth.status"), theme.title_style()),
+                Span::styled(
+                    text(app, "auth.syncing"),
+                    theme.accent_style().add_modifier(Modifier::BOLD),
+                ),
             ])
         } else if app.account_sync_error.is_some() {
             let err_desc = if app.auth.has_oauth() {
-                "(O Google rejeitou o token salvo)"
+                text(app, "auth.oauth_rejected")
             } else {
-                "(O Google rejeitou o cookie salvo)"
+                text(app, "auth.cookie_rejected")
             };
             Line::from(vec![
-                Span::styled("Status da Conta: ", theme.title_style()),
-                Span::styled("⚠️ Sessão Expirada ", theme.liked_style().add_modifier(Modifier::BOLD)),
+                Span::styled(app.i18n.t("auth.status"), theme.title_style()),
+                Span::styled(
+                    text(app, "auth.session_expired_label"),
+                    theme.liked_style().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(err_desc, theme.muted_style()),
             ])
         } else {
             Line::from(vec![
-                Span::styled("Status da Conta: ", theme.title_style()),
-                Span::styled("✓ Conectado ao YouTube Music", theme.playing_indicator_style().add_modifier(Modifier::BOLD)),
+                Span::styled(app.i18n.t("auth.status"), theme.title_style()),
+                Span::styled(
+                    text(app, "auth.connected_label"),
+                    theme.playing_indicator_style().add_modifier(Modifier::BOLD),
+                ),
             ])
         }
     } else {
         Line::from(vec![
-            Span::styled("Status da Conta: ", theme.title_style()),
-            Span::styled("● Modo Público / Anônimo", theme.accent_style().add_modifier(Modifier::BOLD)),
-            Span::styled(" (Busca, Rádio e reprodução liberados)", theme.muted_style()),
+            Span::styled(app.i18n.t("auth.status"), theme.title_style()),
+            Span::styled(
+                text(app, "auth.public_label"),
+                theme.accent_style().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(text(app, "auth.public_description"), theme.muted_style()),
         ])
     };
 
     let p_status = Paragraph::new(vec![
         status_line,
-        Line::from(Span::styled("A autenticação sincroniza suas Músicas Curtidas, Playlists e Perfil com sua conta Google.", theme.text_style())),
+        Line::from(Span::styled(
+            text(app, "auth.sync_description"),
+            theme.text_style(),
+        )),
     ]);
     f.render_widget(p_status, chunks[0]);
 
     // 2. Instructions / OAuth prompt
     let instr_lines = if let Some(code) = &app.oauth_user_code {
-        let url = app.oauth_verification_url.as_deref().unwrap_or("https://www.google.com/device");
+        let url = app
+            .oauth_verification_url
+            .as_deref()
+            .unwrap_or("https://www.google.com/device");
         vec![
             Line::from(vec![
-                Span::styled("Login Google Device em andamento: ", theme.title_style()),
-                Span::styled("Autorize em qualquer navegador", theme.text_style()),
+                Span::styled(text(app, "auth.device_login"), theme.title_style()),
+                Span::styled(text(app, "auth.authorize_browser"), theme.text_style()),
             ]),
             Line::from(vec![
-                Span::styled(" 1. Acesse: ", theme.muted_style()),
-                Span::styled(url, theme.accent_style().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)),
+                Span::styled(text(app, "auth.open_label"), theme.muted_style()),
+                Span::styled(
+                    url,
+                    theme
+                        .accent_style()
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                ),
             ]),
             Line::from(vec![
-                Span::styled(" 2. Código: ", theme.muted_style()),
-                Span::styled(format!("[  {}  ]", code), theme.playing_indicator_style().add_modifier(Modifier::BOLD)),
+                Span::styled(text(app, "auth.code_label"), theme.muted_style()),
+                Span::styled(
+                    format!("[  {}  ]", code),
+                    theme.playing_indicator_style().add_modifier(Modifier::BOLD),
+                ),
             ]),
-            Line::from(Span::styled(" 3. Conecte sua conta e clique em Permitir", theme.muted_style())),
-            Line::from(Span::styled(" ⏳ Aguardando aprovação no navegador...", theme.playing_indicator_style())),
+            Line::from(Span::styled(
+                text(app, "auth.connect_allow"),
+                theme.muted_style(),
+            )),
+            Line::from(Span::styled(
+                text(app, "auth.waiting_approval"),
+                theme.playing_indicator_style(),
+            )),
         ]
     } else {
         vec![
             Line::from(vec![
-                Span::styled("[o] Iniciar Login Google (Permanente): ", theme.accent_style().add_modifier(Modifier::BOLD)),
-                Span::styled("Gera código para google.com/device", theme.text_style()),
+                Span::styled(
+                    text(app, "auth.start_login"),
+                    theme.accent_style().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(text(app, "auth.generate_code"), theme.text_style()),
             ]),
-            Line::from(Span::styled(" ── Ou cole o cabeçalho Cookie do DevTools abaixo: ──", theme.muted_style())),
-            Line::from(Span::styled(" 1. Acesse https://music.youtube.com e faça login", theme.muted_style())),
-            Line::from(Span::styled(" 2. Abra DevTools (F12) -> aba Rede -> copie o cabeçalho 'cookie'", theme.muted_style())),
-            Line::from(Span::styled(" 3. Cole abaixo (Ctrl+Shift+V) e pressione Enter", theme.muted_style())),
+            Line::from(Span::styled(
+                text(app, "auth.paste_devtools"),
+                theme.muted_style(),
+            )),
+            Line::from(Span::styled(
+                text(app, "auth.open_music"),
+                theme.muted_style(),
+            )),
+            Line::from(Span::styled(
+                text(app, "auth.copy_cookie"),
+                theme.muted_style(),
+            )),
+            Line::from(Span::styled(
+                text(app, "auth.paste_cookie_instruction"),
+                theme.muted_style(),
+            )),
         ]
     };
     let p_instr = Paragraph::new(instr_lines);
@@ -196,13 +310,19 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme.focused_border_style())
-        .title(Span::styled(" Cole o Cookie aqui (opcional) ", theme.accent_style()));
+        .title(Span::styled(
+            app.i18n.t("auth.cookie"),
+            theme.accent_style(),
+        ));
 
     let display_text = if app.auth_input.is_empty() {
         if app.is_oauth_polling {
-            Span::styled("Aguardando login no navegador pelo link acima... █", theme.playing_indicator_style())
+            Span::styled(
+                text(app, "auth.waiting_browser"),
+                theme.playing_indicator_style(),
+            )
         } else {
-            Span::styled("Pressione [o] para Login Google ou cole o cookie aqui... █", theme.muted_style())
+            Span::styled(text(app, "auth.prompt_cookie"), theme.muted_style())
         }
     } else {
         let char_count = app.auth_input.chars().count();
@@ -232,17 +352,26 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
     // 5. Footer Shortcuts
     let footer_line = Line::from(vec![
         if app.is_oauth_polling {
-            Span::styled("⏳ Aguardando Google...  ", theme.playing_indicator_style())
+            Span::styled(
+                text(app, "auth.waiting_google"),
+                theme.playing_indicator_style(),
+            )
         } else {
-            Span::styled("[o] Login Google (TV)  ", theme.accent_style().add_modifier(Modifier::BOLD))
+            Span::styled(
+                text(app, "auth.login_tv"),
+                theme.accent_style().add_modifier(Modifier::BOLD),
+            )
         },
-        Span::styled("[Enter] Salvar Cookie  ", theme.text_style().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            text(app, "auth.save_cookie"),
+            theme.text_style().add_modifier(Modifier::BOLD),
+        ),
         if app.auth.is_authenticated() {
-            Span::styled("[l] Desconectar Conta  ", theme.liked_style())
+            Span::styled(text(app, "auth.disconnect"), theme.liked_style())
         } else {
             Span::raw("")
         },
-        Span::styled("[Esc] Fechar Janela", theme.muted_style()),
+        Span::styled(text(app, "auth.close_window"), theme.muted_style()),
     ]);
     let p_footer = Paragraph::new(footer_line).alignment(Alignment::Right);
     f.render_widget(p_footer, chunks[4]);

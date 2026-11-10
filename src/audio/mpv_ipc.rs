@@ -1,8 +1,8 @@
+use anyhow::{Context, Result};
+use serde_json::json;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use anyhow::{Context, Result};
-use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::Command;
@@ -34,7 +34,10 @@ pub struct MpvController {
 
 impl MpvController {
     pub async fn send(&self, cmd: MpvCommand) -> Result<()> {
-        self.cmd_tx.send(cmd).await.map_err(|_| anyhow::anyhow!("MPV worker channel closed"))
+        self.cmd_tx
+            .send(cmd)
+            .await
+            .map_err(|_| anyhow::anyhow!("MPV worker channel closed"))
     }
 }
 
@@ -91,12 +94,14 @@ impl MpvManager {
                                 let name = val.get("name").and_then(|n| n.as_str()).unwrap_or("");
                                 match name {
                                     "time-pos" => {
-                                        if let Some(pos) = val.get("data").and_then(|d| d.as_f64()) {
+                                        if let Some(pos) = val.get("data").and_then(|d| d.as_f64())
+                                        {
                                             let _ = ev_tx.send(MpvEvent::TimePos(pos)).await;
                                         }
                                     }
                                     "duration" => {
-                                        if let Some(dur) = val.get("data").and_then(|d| d.as_f64()) {
+                                        if let Some(dur) = val.get("data").and_then(|d| d.as_f64())
+                                        {
                                             let _ = ev_tx.send(MpvEvent::Duration(dur)).await;
                                         }
                                     }
@@ -112,7 +117,8 @@ impl MpvManager {
                                 let _ = ev_tx.send(MpvEvent::FileLoaded).await;
                             }
                             "end-file" => {
-                                let reason = val.get("reason").and_then(|r| r.as_str()).unwrap_or("");
+                                let reason =
+                                    val.get("reason").and_then(|r| r.as_str()).unwrap_or("");
                                 if reason == "eof" {
                                     let _ = ev_tx.send(MpvEvent::Eof).await;
                                 } else if reason == "error" {

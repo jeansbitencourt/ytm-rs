@@ -1,3 +1,4 @@
+use crate::i18n::I18n;
 use serde::{Deserialize, Serialize};
 
 pub mod auth;
@@ -81,6 +82,14 @@ impl SearchFilter {
             SearchFilter::Tracks => "🎵 Músicas",
             SearchFilter::Albums => "💿 Álbuns",
             SearchFilter::Artists => "🎤 Artistas",
+        }
+    }
+
+    pub fn localized_label(&self, i18n: &I18n) -> String {
+        match self {
+            SearchFilter::Tracks => i18n.t("filter.tracks"),
+            SearchFilter::Albums => i18n.t("filter.albums"),
+            SearchFilter::Artists => i18n.t("filter.artists"),
         }
     }
 

@@ -19,8 +19,14 @@ async fn test_innertube_album_and_artist_search_live() {
     let client = InnertubeClient::new(AuthConfig::default());
 
     // Search albums
-    let albums = client.search_albums("Random Access Memories").await.unwrap();
-    assert!(!albums.is_empty(), "Should find albums for Random Access Memories");
+    let albums = client
+        .search_albums("Random Access Memories")
+        .await
+        .unwrap();
+    assert!(
+        !albums.is_empty(),
+        "Should find albums for Random Access Memories"
+    );
     let album = &albums[0];
     assert!(!album.browse_id.is_empty());
 
@@ -39,7 +45,10 @@ async fn test_innertube_album_and_artist_search_live() {
     // Browse artist tracks
     let (artist_name, artist_tracks) = client.get_artist_tracks(&artist.browse_id).await.unwrap();
     assert!(!artist_name.is_empty());
-    assert!(!artist_tracks.is_empty(), "Artist should have tracks available");
+    assert!(
+        !artist_tracks.is_empty(),
+        "Artist should have tracks available"
+    );
 }
 
 #[test]
@@ -75,7 +84,10 @@ async fn test_live_track_search_and_radio() {
     let tracks = client.search("Stranger in a Strange Land").await.unwrap();
     assert!(!tracks.is_empty(), "Should find tracks");
     for t in tracks.iter().take(3) {
-        println!("Search Track: '{}' by '{}', album: '{}', dur_secs: {}, dur_text: '{}'", t.title, t.artist, t.album, t.duration_secs, t.duration_text);
+        println!(
+            "Search Track: '{}' by '{}', album: '{}', dur_secs: {}, dur_text: '{}'",
+            t.title, t.artist, t.album, t.duration_secs, t.duration_text
+        );
         assert!(t.duration_secs > 0, "Duration must be greater than 0");
         assert_ne!(t.duration_text, "00:00", "Duration must not be 00:00");
     }
@@ -84,8 +96,22 @@ async fn test_live_track_search_and_radio() {
 #[test]
 fn test_database_lifecycle() {
     let db = Database::open_in_memory().expect("Should open in-memory db");
-    let track1 = Track::new("vid_01", "Nightcall", "Kavinsky", "OutRun", 258, "https://thumb.url");
-    let track2 = Track::new("vid_02", "Resonance", "HOME", "Odyssey", 212, "https://thumb.url");
+    let track1 = Track::new(
+        "vid_01",
+        "Nightcall",
+        "Kavinsky",
+        "OutRun",
+        258,
+        "https://thumb.url",
+    );
+    let track2 = Track::new(
+        "vid_02",
+        "Resonance",
+        "HOME",
+        "Odyssey",
+        212,
+        "https://thumb.url",
+    );
 
     // Test liked
     db.add_liked_track(&track1).unwrap();
@@ -104,7 +130,8 @@ fn test_database_lifecycle() {
     assert_eq!(history[0].title, "Resonance"); // most recent first
 
     // Test stream cache
-    db.save_stream_url("vid_01", "https://stream.opus", 1000).unwrap();
+    db.save_stream_url("vid_01", "https://stream.opus", 1000)
+        .unwrap();
     let cached = db.get_stream_url("vid_01").unwrap();
     assert_eq!(cached, Some("https://stream.opus".to_string()));
 }
@@ -170,7 +197,9 @@ fn test_detect_font_size() {
 
 #[tokio::test]
 async fn test_oauth_user_profile_and_library_live() {
-    let auth_path = dirs::config_dir().map(|p| p.join("ytm-rs/auth.json")).unwrap();
+    let auth_path = dirs::config_dir()
+        .map(|p| p.join("ytm-rs/auth.json"))
+        .unwrap();
     let auth = AuthConfig::load(&auth_path);
     if !auth.has_oauth() {
         return;
@@ -179,23 +208,43 @@ async fn test_oauth_user_profile_and_library_live() {
     let client = InnertubeClient::new(auth);
 
     // Profile test
-    let prof = client.get_user_profile().await.expect("Failed to get user profile");
+    let prof = client
+        .get_user_profile()
+        .await
+        .expect("Failed to get user profile");
     assert!(prof.is_some(), "Profile should be present for valid OAuth");
     let p = prof.unwrap();
     assert_eq!(p.name, "Jean Bitencourt");
     assert!(!p.avatar_url.is_empty());
 
     // Playlists test
-    let playlists = client.get_user_playlists().await.expect("Failed to get playlists");
+    let playlists = client
+        .get_user_playlists()
+        .await
+        .expect("Failed to get playlists");
     assert!(!playlists.is_empty(), "Should find user playlists");
 
     // Liked music test (should paginate and retrieve > 200 tracks)
-    let liked = client.get_liked_music().await.expect("Failed to get liked music");
-    assert!(liked.len() > 200, "Should paginate and find > 200 liked tracks, found: {}", liked.len());
+    let liked = client
+        .get_liked_music()
+        .await
+        .expect("Failed to get liked music");
+    assert!(
+        liked.len() > 200,
+        "Should paginate and find > 200 liked tracks, found: {}",
+        liked.len()
+    );
 
     // Playlist tracks test
-    let (pl_title, pl_tracks) = client.get_playlist_tracks(&playlists[0].id).await.expect("Failed to get playlist tracks");
-    assert!(!pl_tracks.is_empty(), "First playlist '{}' should have tracks", pl_title);
+    let (pl_title, pl_tracks) = client
+        .get_playlist_tracks(&playlists[0].id)
+        .await
+        .expect("Failed to get playlist tracks");
+    assert!(
+        !pl_tracks.is_empty(),
+        "First playlist '{}' should have tracks",
+        pl_title
+    );
 }
 
 #[test]
@@ -236,11 +285,19 @@ fn test_cache_first_and_sync_ttl() {
 
     // Less than 24h passed: should NOT sync
     let five_minutes_later = now + 300;
-    let should_sync_recent = (five_minutes_later.saturating_sub(last_sync) >= SYNC_TTL_SECS) || loaded.is_empty();
-    assert!(!should_sync_recent, "Should skip network sync when cache is fresh (< 24h)");
+    let should_sync_recent =
+        (five_minutes_later.saturating_sub(last_sync) >= SYNC_TTL_SECS) || loaded.is_empty();
+    assert!(
+        !should_sync_recent,
+        "Should skip network sync when cache is fresh (< 24h)"
+    );
 
     // More than 24h passed: should sync
     let two_days_later = now + 172_800;
-    let should_sync_expired = (two_days_later.saturating_sub(last_sync) >= SYNC_TTL_SECS) || loaded.is_empty();
-    assert!(should_sync_expired, "Should trigger sync when cache is expired (> 24h)");
+    let should_sync_expired =
+        (two_days_later.saturating_sub(last_sync) >= SYNC_TTL_SECS) || loaded.is_empty();
+    assert!(
+        should_sync_expired,
+        "Should trigger sync when cache is expired (> 24h)"
+    );
 }

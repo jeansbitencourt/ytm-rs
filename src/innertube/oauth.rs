@@ -1,10 +1,11 @@
-use std::time::Duration;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::Duration;
 
-pub const DEFAULT_CLIENT_ID: &str = "861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com";
+pub const DEFAULT_CLIENT_ID: &str =
+    "861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com";
 pub const DEFAULT_CLIENT_SECRET: &str = "SboVhoG9s0rNafixCSGGKXAT";
 pub const OAUTH_SCOPE: &str = "http://gdata.youtube.com https://www.googleapis.com/auth/youtube";
 pub const DEVICE_CODE_URL: &str = "https://oauth2.googleapis.com/device/code";
@@ -43,12 +44,10 @@ pub async fn request_device_code(client_id: &str) -> Result<DeviceCodeResponse> 
         .build()
         .unwrap_or_default();
 
-    let params = [
-        ("client_id", client_id),
-        ("scope", OAUTH_SCOPE),
-    ];
+    let params = [("client_id", client_id), ("scope", OAUTH_SCOPE)];
 
-    let resp = http.post(DEVICE_CODE_URL)
+    let resp = http
+        .post(DEVICE_CODE_URL)
         .form(&params)
         .send()
         .await
@@ -59,15 +58,30 @@ pub async fn request_device_code(client_id: &str) -> Result<DeviceCodeResponse> 
         anyhow::bail!("Google Device Code request failed: {}", err_text);
     }
 
-    let val: Value = resp.json().await.context("Failed to parse device code JSON")?;
+    let val: Value = resp
+        .json()
+        .await
+        .context("Failed to parse device code JSON")?;
 
-    let device_code = val.get("device_code").and_then(|v| v.as_str()).context("Missing device_code")?.to_string();
-    let user_code = val.get("user_code").and_then(|v| v.as_str()).context("Missing user_code")?.to_string();
-    let verification_url = val.get("verification_url")
+    let device_code = val
+        .get("device_code")
+        .and_then(|v| v.as_str())
+        .context("Missing device_code")?
+        .to_string();
+    let user_code = val
+        .get("user_code")
+        .and_then(|v| v.as_str())
+        .context("Missing user_code")?
+        .to_string();
+    let verification_url = val
+        .get("verification_url")
         .and_then(|v| v.as_str())
         .unwrap_or("https://www.google.com/device")
         .to_string();
-    let expires_in = val.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(1800);
+    let expires_in = val
+        .get("expires_in")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1800);
     let interval = val.get("interval").and_then(|v| v.as_u64()).unwrap_or(5);
 
     Ok(DeviceCodeResponse {
@@ -97,7 +111,8 @@ pub async fn poll_token_once(
         ("grant_type", "http://oauth.net/grant_type/device/1.0"),
     ];
 
-    let resp = http.post(TOKEN_URL)
+    let resp = http
+        .post(TOKEN_URL)
         .form(&params)
         .send()
         .await
@@ -144,7 +159,8 @@ pub async fn refresh_access_token(
         ("grant_type", "refresh_token"),
     ];
 
-    let resp = http.post(TOKEN_URL)
+    let resp = http
+        .post(TOKEN_URL)
         .form(&params)
         .send()
         .await
@@ -155,7 +171,10 @@ pub async fn refresh_access_token(
         anyhow::bail!("Google token refresh failed: {}", err_text);
     }
 
-    let mut tok: TokenResponse = resp.json().await.context("Failed to parse token refresh JSON")?;
+    let mut tok: TokenResponse = resp
+        .json()
+        .await
+        .context("Failed to parse token refresh JSON")?;
     // Some providers do not re-emit the refresh token; retain the original one
     if tok.refresh_token.is_none() {
         tok.refresh_token = Some(refresh_token.to_string());

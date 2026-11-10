@@ -20,6 +20,7 @@ O `ytm-rs` consome menos de **18 MB de RAM**, funciona **imediatamente sem login
 - **Transições Instantâneas (Prefetching)**: Worker assíncrono resolve a URL de áudio Opus 251 da próxima faixa assim que a música atual atinge 80%, garantindo troca instantânea (< 50ms).
 - **Rádio Dinâmica Infinita**: Pressione `r` em qualquer faixa para gerar uma fila de rádio infinita baseada no algoritmo do YouTube Music (`RDAMVM{videoId}`).
 - **Atalhos Orientados a Teclado (Vim-like)**.
+- **Internacionalização**: a interface suporta Português (Brasil) e English por meio do catálogo centralizado do `rust-i18n`. Por padrão, acompanha o idioma escolhido no Omarchy (`~/.config/omarchy/language`) ou as variáveis de locale do Linux. Pressione `F2` na TUI para escolher `Seguir sistema`, `Português (Brasil)` ou `English`; a preferência fica em `~/.config/ytm-rs/config.toml` e a troca não interrompe a reprodução.
 
 ---
 

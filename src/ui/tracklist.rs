@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -6,7 +5,9 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Pa
 use ratatui::Frame;
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::StatefulImage;
+use std::collections::{HashMap, HashSet};
 
+use crate::i18n::I18n;
 use crate::innertube::{AlbumSummary, ArtistSummary, Track};
 use crate::theme::Theme;
 
@@ -36,6 +37,7 @@ pub fn render_tracklist(
     is_focused: bool,
     thumb_protocols: &mut HashMap<String, Box<dyn StatefulProtocol>>,
     is_loading: bool,
+    i18n: &I18n,
 ) {
     let border_style = if is_focused {
         theme.focused_border_style()
@@ -44,8 +46,11 @@ pub fn render_tracklist(
     };
 
     let title = Line::from(vec![
-        Span::styled(format!(" Faixas: {} [2] ", title_text), theme.title_style()),
-        Span::styled("── [f: Favoritar | a: Add Fila | s: Aleatório | r: Rádio | q: Esconder] ", theme.muted_style()),
+        Span::styled(
+            format!(" {}: {} [2] ", i18n.t("tracklist.title"), title_text),
+            theme.title_style(),
+        ),
+        Span::styled(i18n.t("tracklist.hint"), theme.muted_style()),
     ]);
 
     let block = Block::default()
@@ -64,9 +69,9 @@ pub fn render_tracklist(
 
     if tracks.is_empty() {
         let msg = if is_loading {
-            "⏳ Carregando faixas da playlist..."
+            i18n.t("tracklist.loading")
         } else {
-            "Nenhuma música na lista."
+            i18n.t("tracklist.empty")
         };
         let empty_msg = Paragraph::new(vec![
             Line::from(""),
@@ -135,9 +140,7 @@ pub fn render_tracklist(
             };
 
             // Line 0: Top padding line
-            let line0 = Line::from(vec![
-                Span::raw(" ".repeat(inner_w)),
-            ]);
+            let line0 = Line::from(vec![Span::raw(" ".repeat(inner_w))]);
 
             // Line 1: Track title & duration
             let line1 = Line::from(vec![
@@ -183,9 +186,7 @@ pub fn render_tracklist(
             ]);
 
             // Line 3: Bottom padding line
-            let line3 = Line::from(vec![
-                Span::raw(" ".repeat(inner_w)),
-            ]);
+            let line3 = Line::from(vec![Span::raw(" ".repeat(inner_w))]);
 
             ListItem::new(vec![line0, line1, line2, line3])
         })
@@ -241,6 +242,7 @@ pub fn render_album_list(
     state: &mut ListState,
     is_focused: bool,
     thumb_protocols: &mut HashMap<String, Box<dyn StatefulProtocol>>,
+    i18n: &I18n,
 ) {
     let border_style = if is_focused {
         theme.focused_border_style()
@@ -249,8 +251,11 @@ pub fn render_album_list(
     };
 
     let title = Line::from(vec![
-        Span::styled(format!(" Álbuns: {} [2] ", title_text), theme.title_style()),
-        Span::styled("── [Enter: Abrir | p: Tocar Álbum | a: Add Fila | q: Esconder] ", theme.muted_style()),
+        Span::styled(
+            format!(" {}: {} [2] ", i18n.t("albums.title"), title_text),
+            theme.title_style(),
+        ),
+        Span::styled(i18n.t("albums.hint"), theme.muted_style()),
     ]);
 
     let block = Block::default()
@@ -270,7 +275,7 @@ pub fn render_album_list(
     if albums.is_empty() {
         let empty_msg = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("Nenhum álbum encontrado.", theme.muted_style())),
+            Line::from(Span::styled(i18n.t("albums.empty"), theme.muted_style())),
         ])
         .alignment(Alignment::Center)
         .block(block);
@@ -298,7 +303,7 @@ pub fn render_album_list(
             let year_str = if !album.year.is_empty() {
                 format!(" {} ", album.year)
             } else {
-                " Álbum ".to_string()
+                format!(" {} ", i18n.t("albums.title"))
             };
             let year_len = year_str.chars().count();
             let year_span = Span::styled(year_str, theme.muted_style());
@@ -319,9 +324,7 @@ pub fn render_album_list(
             };
 
             // Line 0: Top padding line
-            let line0 = Line::from(vec![
-                Span::raw(" ".repeat(inner_w)),
-            ]);
+            let line0 = Line::from(vec![Span::raw(" ".repeat(inner_w))]);
 
             // Line 1: Album title & year
             let line1 = Line::from(vec![
@@ -334,9 +337,9 @@ pub fn render_album_list(
 
             // Line 2: Artist name
             let subtitle = if !album.artist.is_empty() {
-                format!("{} • Álbum", album.artist)
+                format!("{} • {}", album.artist, i18n.t("albums.title").trim())
             } else {
-                "Álbum".to_string()
+                i18n.t("albums.title")
             };
 
             let avail_sub_w = inner_w.saturating_sub(left_w + 1);
@@ -365,9 +368,7 @@ pub fn render_album_list(
             ]);
 
             // Line 3: Bottom padding line
-            let line3 = Line::from(vec![
-                Span::raw(" ".repeat(inner_w)),
-            ]);
+            let line3 = Line::from(vec![Span::raw(" ".repeat(inner_w))]);
 
             ListItem::new(vec![line0, line1, line2, line3])
         })
@@ -422,6 +423,7 @@ pub fn render_artist_list(
     state: &mut ListState,
     is_focused: bool,
     thumb_protocols: &mut HashMap<String, Box<dyn StatefulProtocol>>,
+    i18n: &I18n,
 ) {
     let border_style = if is_focused {
         theme.focused_border_style()
@@ -430,8 +432,11 @@ pub fn render_artist_list(
     };
 
     let title = Line::from(vec![
-        Span::styled(format!(" Artistas: {} [2] ", title_text), theme.title_style()),
-        Span::styled("── [Enter: Músicas | p: Tocar Todas | a: Add Fila | q: Esconder] ", theme.muted_style()),
+        Span::styled(
+            format!(" {}: {} [2] ", i18n.t("artists.title"), title_text),
+            theme.title_style(),
+        ),
+        Span::styled(i18n.t("artists.hint"), theme.muted_style()),
     ]);
 
     let block = Block::default()
@@ -451,7 +456,7 @@ pub fn render_artist_list(
     if artists.is_empty() {
         let empty_msg = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("Nenhum artista encontrado.", theme.muted_style())),
+            Line::from(Span::styled(i18n.t("artists.empty"), theme.muted_style())),
         ])
         .alignment(Alignment::Center)
         .block(block);
@@ -491,9 +496,7 @@ pub fn render_artist_list(
             };
 
             // Line 0: Top padding line
-            let line0 = Line::from(vec![
-                Span::raw(" ".repeat(inner_w)),
-            ]);
+            let line0 = Line::from(vec![Span::raw(" ".repeat(inner_w))]);
 
             // Line 1: Artist name
             let line1 = Line::from(vec![
@@ -507,7 +510,7 @@ pub fn render_artist_list(
             let subtitle = if !artist.subscribers_text.is_empty() {
                 artist.subscribers_text.clone()
             } else {
-                "Artista".to_string()
+                i18n.t("artists.title")
             };
 
             let avail_sub_w = inner_w.saturating_sub(left_w + 1);
@@ -536,9 +539,7 @@ pub fn render_artist_list(
             ]);
 
             // Line 3: Bottom padding line
-            let line3 = Line::from(vec![
-                Span::raw(" ".repeat(inner_w)),
-            ]);
+            let line3 = Line::from(vec![Span::raw(" ".repeat(inner_w))]);
 
             ListItem::new(vec![line0, line1, line2, line3])
         })

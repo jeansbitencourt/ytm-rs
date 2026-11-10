@@ -1,8 +1,8 @@
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::innertube::{PlaylistSummary, Track, UserProfile};
 use anyhow::Result;
 use rusqlite::{params, Connection};
-use crate::innertube::{PlaylistSummary, Track, UserProfile};
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct Database {
     conn: Connection,
@@ -61,7 +61,10 @@ impl Database {
         )?;
 
         // Ensure backward-compatible migration for playlists table
-        let has_playlists = self.conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='playlists'")?.exists([])?;
+        let has_playlists = self
+            .conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='playlists'")?
+            .exists([])?;
         if has_playlists {
             let has_title = {
                 let mut stmt = self.conn.prepare("PRAGMA table_info(playlists)")?;
@@ -77,7 +80,10 @@ impl Database {
                 found
             };
             if !has_title {
-                let count: i64 = self.conn.query_row("SELECT count(*) FROM playlists", [], |r| r.get(0)).unwrap_or(0);
+                let count: i64 = self
+                    .conn
+                    .query_row("SELECT count(*) FROM playlists", [], |r| r.get(0))
+                    .unwrap_or(0);
                 if count == 0 {
                     let _ = self.conn.execute("DROP TABLE playlists", []);
                 }
@@ -85,7 +91,10 @@ impl Database {
         }
 
         // Ensure backward-compatible migration for playlist_tracks table
-        let has_playlist_tracks = self.conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='playlist_tracks'")?.exists([])?;
+        let has_playlist_tracks = self
+            .conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='playlist_tracks'")?
+            .exists([])?;
         if has_playlist_tracks {
             let has_duration_text = {
                 let mut stmt = self.conn.prepare("PRAGMA table_info(playlist_tracks)")?;
@@ -101,7 +110,10 @@ impl Database {
                 found
             };
             if !has_duration_text {
-                let count: i64 = self.conn.query_row("SELECT count(*) FROM playlist_tracks", [], |r| r.get(0)).unwrap_or(0);
+                let count: i64 = self
+                    .conn
+                    .query_row("SELECT count(*) FROM playlist_tracks", [], |r| r.get(0))
+                    .unwrap_or(0);
                 if count == 0 {
                     let _ = self.conn.execute("DROP TABLE playlist_tracks", []);
                 }
@@ -172,7 +184,9 @@ impl Database {
     }
 
     pub fn is_track_liked(&self, video_id: &str) -> Result<bool> {
-        let mut stmt = self.conn.prepare("SELECT 1 FROM liked_tracks WHERE video_id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT 1 FROM liked_tracks WHERE video_id = ?1")?;
         let exists = stmt.exists(params![video_id])?;
         Ok(exists)
     }
@@ -417,7 +431,9 @@ impl Database {
     }
 
     pub fn get_metadata(&self, key: &str) -> Result<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT value FROM app_metadata WHERE key = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT value FROM app_metadata WHERE key = ?1")?;
         let mut rows = stmt.query(params![key])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row.get(0)?))
@@ -566,7 +582,10 @@ mod tests {
         let loaded_prof = db.get_user_profile().unwrap().unwrap();
         assert_eq!(loaded_prof.name, "Jean");
         assert_eq!(loaded_prof.handle, "@jean");
-        assert_eq!(loaded_prof.avatar_url, "https://lh3.googleusercontent.com/avatar");
+        assert_eq!(
+            loaded_prof.avatar_url,
+            "https://lh3.googleusercontent.com/avatar"
+        );
 
         assert_eq!(db.get_last_sync_ts().unwrap(), Some(1700000000));
     }
@@ -574,7 +593,8 @@ mod tests {
     #[test]
     fn test_stream_cache() {
         let db = Database::open_in_memory().unwrap();
-        db.save_stream_url("id2", "https://stream.url", 3600).unwrap();
+        db.save_stream_url("id2", "https://stream.url", 3600)
+            .unwrap();
         let cached = db.get_stream_url("id2").unwrap();
         assert_eq!(cached, Some("https://stream.url".to_string()));
     }

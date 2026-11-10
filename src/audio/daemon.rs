@@ -1,17 +1,25 @@
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Duration;
-use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
-use crate::cache::Database;
-use crate::config::AppConfig;
-use crate::innertube::Track;
 use super::mpv_ipc::{MpvCommand, MpvEvent, MpvManager};
 use super::prefetch::{resolve_stream_url, spawn_prefetch};
 use super::{DaemonCommand, DaemonResponse, PlaybackStatus, PlayerState};
+use crate::cache::Database;
+use crate::config::AppConfig;
+use crate::i18n::I18n;
+use crate::innertube::Track;
+
+fn current_i18n(config: &AppConfig) -> I18n {
+    let preference = AppConfig::load()
+        .map(|settings| settings.settings.general.language)
+        .unwrap_or(config.settings.general.language);
+    I18n::new(preference)
+}
 
 struct SimpleRng(u64);
 
@@ -132,7 +140,10 @@ impl AudioDaemon {
                         let mut state = daemon_for_mpris.state.lock().await;
                         if state.status == PlaybackStatus::Paused {
                             state.status = PlaybackStatus::Playing;
-                            let _ = daemon_for_mpris.mpv_tx.send(MpvCommand::SetPause(false)).await;
+                            let _ = daemon_for_mpris
+                                .mpv_tx
+                                .send(MpvCommand::SetPause(false))
+                                .await;
                         }
                         drop(state);
                         daemon_for_mpris.broadcast_and_save().await;
@@ -141,7 +152,10 @@ impl AudioDaemon {
                         let mut state = daemon_for_mpris.state.lock().await;
                         if state.status == PlaybackStatus::Playing {
                             state.status = PlaybackStatus::Paused;
-                            let _ = daemon_for_mpris.mpv_tx.send(MpvCommand::SetPause(true)).await;
+                            let _ = daemon_for_mpris
+                                .mpv_tx
+                                .send(MpvCommand::SetPause(true))
+                                .await;
                         }
                         drop(state);
                         daemon_for_mpris.broadcast_and_save().await;
@@ -246,7 +260,10 @@ impl AudioDaemon {
                 let cur = state.current_track.clone();
                 drop(state);
                 if let Some(track) = cur {
-                    warn!("MPV reported file error loading {}. Invalidating cache and retrying.", track.video_id);
+                    warn!(
+                        "MPV reported file error loading {}. Invalidating cache and retrying.",
+                        track.video_id
+                    );
                     {
                         let db = self.db.lock().await;
                         let _ = db.remove_stream_url(&track.video_id);
@@ -467,7 +484,10 @@ impl AudioDaemon {
             if !orig_queue.is_empty() {
                 let cur_vid = state.current_track.as_ref().map(|t| t.video_id.as_str());
                 let restored_idx = if let Some(vid) = cur_vid {
-                    orig_queue.iter().position(|t| t.video_id == vid).unwrap_or(0)
+                    orig_queue
+                        .iter()
+                        .position(|t| t.video_id == vid)
+                        .unwrap_or(0)
                 } else {
                     0
                 };
@@ -536,10 +556,23 @@ impl AudioDaemon {
         }
 
         // Send desktop notification
+        let i18n = current_i18n(&self.config);
         let msg = if is_liked {
-            format!("♥ Adicionada aos favoritos:\n{} - {}", current_track.title, current_track.artist)
+            i18n.tf(
+                "notification.liked",
+                [
+                    ("title", current_track.title),
+                    ("artist", current_track.artist),
+                ],
+            )
         } else {
-            format!("Removida dos favoritos:\n{} - {}", current_track.title, current_track.artist)
+            i18n.tf(
+                "notification.unliked",
+                [
+                    ("title", current_track.title),
+                    ("artist", current_track.artist),
+                ],
+            )
         };
 
         tokio::spawn(async move {
@@ -564,13 +597,24 @@ impl AudioDaemon {
 
     pub async fn write_status_json(&self) {
         let state = self.state.lock().await;
+        let i18n = current_i18n(&self.config);
         let file_path = &self.config.status_file;
         let tmp_path = file_path.with_extension("tmp");
 
         let (title, artist, album, thumbnail_url) = if let Some(t) = &state.current_track {
-            (t.title.clone(), t.artist.clone(), t.album.clone(), t.thumbnail_url.clone())
+            (
+                t.title.clone(),
+                t.artist.clone(),
+                t.album.clone(),
+                t.thumbnail_url.clone(),
+            )
         } else {
-            ("Nenhuma reprodução".to_string(), "".to_string(), "".to_string(), "".to_string())
+            (
+                i18n.t("player.no_track"),
+                "".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
         };
 
         let tui_clients = *self.tui_clients.lock().await;
@@ -585,18 +629,38 @@ impl AudioDaemon {
             } else if is_paused {
                 format!("⏸ {} - {}", artist, title)
             } else if is_tui_open {
-                "🎵 YTM-RS (Aberto)".to_string()
+                i18n.t("status.open")
             } else {
                 "🎵 YTM-RS".to_string()
             },
             "tooltip": if is_playing {
-                format!("Tocando: {} - {}\nVolume: {}%\nCurtida: {}", title, artist, state.volume, if state.is_liked { "Sim ♥" } else { "Não" })
+                let liked = if state.is_liked {
+                    i18n.t("status.liked_yes")
+                } else {
+                    i18n.t("status.liked_no")
+                };
+                i18n.tf(
+                    "status.playing_tooltip",
+                    [
+                        ("title", title.clone()),
+                        ("artist", artist.clone()),
+                        ("volume", state.volume.to_string()),
+                        ("liked", liked),
+                    ],
+                )
             } else if is_paused {
-                format!("Pausado: {} - {}\nVolume: {}%", title, artist, state.volume)
+                i18n.tf(
+                    "status.paused_tooltip",
+                    [
+                        ("title", title.clone()),
+                        ("artist", artist.clone()),
+                        ("volume", state.volume.to_string()),
+                    ],
+                )
             } else if is_tui_open {
-                "YTM-RS: Janela aberta (Aguardando reprodução)\nBotão esquerdo: Focar janela\nBotão direito: Controles".to_string()
+                i18n.t("status.window_open_tooltip")
             } else {
-                "YTM-RS: Segundo plano\nBotão esquerdo: Abrir janela\nBotão direito: Controles".to_string()
+                i18n.t("status.background_tooltip")
             },
             "running": true,
             "daemon_running": true,
@@ -613,6 +677,7 @@ impl AudioDaemon {
             "shuffle": state.shuffle_enabled,
             "position": state.position_secs,
             "duration": state.duration_secs,
+            "language": i18n.language.code(),
         });
 
         if let Ok(content) = serde_json::to_string_pretty(&status_json) {
@@ -820,7 +885,12 @@ pub async fn send_daemon_command(config: &AppConfig, cmd: DaemonCommand) -> Resu
 
     let stream = UnixStream::connect(&config.state_sock)
         .await
-        .with_context(|| format!("Failed to connect to daemon socket at {:?}", config.state_sock))?;
+        .with_context(|| {
+            format!(
+                "Failed to connect to daemon socket at {:?}",
+                config.state_sock
+            )
+        })?;
 
     let (reader, mut writer) = stream.into_split();
     let mut line = serde_json::to_string(&cmd)?;
@@ -874,7 +944,9 @@ pub async fn ensure_daemon_running(config: &AppConfig) -> Result<()> {
         }
     }
 
-    Err(anyhow::anyhow!("Timed out waiting for daemon socket to be created"))
+    Err(anyhow::anyhow!(
+        "Timed out waiting for daemon socket to be created"
+    ))
 }
 
 #[cfg(test)]

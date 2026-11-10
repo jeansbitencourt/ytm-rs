@@ -33,13 +33,16 @@ impl App {
                         }
                     }
                     PlayerButton::Shuffle => {
-                        let _ = send_daemon_command(&self.config, DaemonCommand::ToggleShuffle).await;
+                        let _ =
+                            send_daemon_command(&self.config, DaemonCommand::ToggleShuffle).await;
                     }
                     PlayerButton::VolDown => {
-                        let _ = send_daemon_command(&self.config, DaemonCommand::VolumeDelta(-5)).await;
+                        let _ =
+                            send_daemon_command(&self.config, DaemonCommand::VolumeDelta(-5)).await;
                     }
                     PlayerButton::VolUp => {
-                        let _ = send_daemon_command(&self.config, DaemonCommand::VolumeDelta(5)).await;
+                        let _ =
+                            send_daemon_command(&self.config, DaemonCommand::VolumeDelta(5)).await;
                     }
                     PlayerButton::Account => {
                         self.show_auth_modal = !self.show_auth_modal;
@@ -64,7 +67,12 @@ impl App {
             }
 
             // Check if search filter buttons were clicked
-            if let Some(filter) = crate::ui::get_search_filter_button_at(mouse.column, mouse.row, self.header_search_area) {
+            if let Some(filter) = crate::ui::get_search_filter_button_at_for_language(
+                mouse.column,
+                mouse.row,
+                self.header_search_area,
+                &self.i18n,
+            ) {
                 self.search_filter = filter;
                 self.active_panel = ActivePanel::Search;
                 if !self.search_input.trim().is_empty() {
@@ -123,7 +131,8 @@ impl App {
                         if !self.displayed_tracks.is_empty() {
                             let card_idx = self.tracklist_state.offset() + card_offset;
                             if card_idx < self.displayed_tracks.len() {
-                                let was_selected = self.tracklist_state.selected() == Some(card_idx);
+                                let was_selected =
+                                    self.tracklist_state.selected() == Some(card_idx);
                                 self.tracklist_state.select(Some(card_idx));
                                 if was_selected {
                                     let now = std::time::Instant::now();
@@ -151,7 +160,8 @@ impl App {
                         if !self.search_results_albums.is_empty() {
                             let card_idx = self.album_table_state.offset() + card_offset;
                             if card_idx < self.search_results_albums.len() {
-                                let was_selected = self.album_table_state.selected() == Some(card_idx);
+                                let was_selected =
+                                    self.album_table_state.selected() == Some(card_idx);
                                 self.album_table_state.select(Some(card_idx));
                                 if was_selected {
                                     self.open_selected_album(false).await;
@@ -163,7 +173,8 @@ impl App {
                         if !self.search_results_artists.is_empty() {
                             let card_idx = self.artist_table_state.offset() + card_offset;
                             if card_idx < self.search_results_artists.len() {
-                                let was_selected = self.artist_table_state.selected() == Some(card_idx);
+                                let was_selected =
+                                    self.artist_table_state.selected() == Some(card_idx);
                                 self.artist_table_state.select(Some(card_idx));
                                 if was_selected {
                                     self.open_selected_artist(false).await;

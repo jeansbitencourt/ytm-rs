@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, BorderType, Borders, LineGauge, Paragraph};
 use ratatui::Frame;
 
 use crate::audio::{PlaybackStatus, PlayerState};
+use crate::i18n::I18n;
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,12 +124,7 @@ pub fn compute_visualizer_levels(status: PlaybackStatus, position_secs: f64) -> 
     }
 }
 
-fn render_audio_visualizer(
-    f: &mut Frame,
-    area: Rect,
-    theme: &Theme,
-    player: &PlayerState,
-) {
+fn render_audio_visualizer(f: &mut Frame, area: Rect, theme: &Theme, player: &PlayerState) {
     if area.width < 6 || area.height < 2 {
         return;
     }
@@ -137,21 +133,13 @@ fn render_audio_visualizer(
 
     // Row 0: Status badge / Title
     let row0 = match player.status {
-        PlaybackStatus::Playing => {
-            Line::from(vec![
-                Span::styled(" ♫ ", theme.title_style()),
-                Span::styled("LIVE ", theme.accent_style().add_modifier(Modifier::BOLD)),
-            ])
-        }
-        PlaybackStatus::Paused => {
-            Line::from(Span::styled(" ⏸ PAUS ", theme.muted_style()))
-        }
-        PlaybackStatus::Buffering => {
-            Line::from(Span::styled(" ⏳ BUFF ", theme.accent_style()))
-        }
-        PlaybackStatus::Stopped => {
-            Line::from(Span::styled(" ■ IDLE ", theme.muted_style()))
-        }
+        PlaybackStatus::Playing => Line::from(vec![
+            Span::styled(" ♫ ", theme.title_style()),
+            Span::styled("LIVE ", theme.accent_style().add_modifier(Modifier::BOLD)),
+        ]),
+        PlaybackStatus::Paused => Line::from(Span::styled(" ⏸ PAUS ", theme.muted_style())),
+        PlaybackStatus::Buffering => Line::from(Span::styled(" ⏳ BUFF ", theme.accent_style())),
+        PlaybackStatus::Stopped => Line::from(Span::styled(" ■ IDLE ", theme.muted_style())),
     };
 
     // If area only has height 2:
@@ -165,7 +153,9 @@ fn render_audio_visualizer(
                     if single_lvl >= 7 {
                         theme.liked_style()
                     } else if single_lvl >= 5 {
-                        Style::default().fg(theme.yellow).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(theme.yellow)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         theme.playing_indicator_style()
                     }
@@ -201,7 +191,9 @@ fn render_audio_visualizer(
                 if lvl >= 14 {
                     theme.liked_style()
                 } else if lvl >= 11 {
-                    Style::default().fg(theme.yellow).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(theme.yellow)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     theme.accent_style()
                 }
@@ -222,11 +214,7 @@ fn render_audio_visualizer(
     upper_spans.push(Span::raw(" "));
     lower_spans.push(Span::raw(" "));
 
-    let p = Paragraph::new(vec![
-        row0,
-        Line::from(upper_spans),
-        Line::from(lower_spans),
-    ]);
+    let p = Paragraph::new(vec![row0, Line::from(upper_spans), Line::from(lower_spans)]);
     f.render_widget(p, area);
 }
 
@@ -235,6 +223,7 @@ pub fn render_playerbar(
     area: Rect,
     theme: &Theme,
     player: &PlayerState,
+    i18n: &I18n,
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -260,7 +249,7 @@ pub fn render_playerbar(
 
     // Right: 3 rows:
     // Row 0: Title — Artist [Codec tag]
-    // Row 1: Interactive Buttons: [⏮ Prev] [⏯ Play] [⏭ Next] [♥ Like] [📻 Rádio] [🔉 Vol-] [🔊 Vol+] [❓ Ajuda]
+    // Row 1: Interactive Buttons: [⏮ Prev] [⏯ Play] [⏭ Next] [♥ Like] [📻 Radio] [🔉 Vol-] [🔊 Vol+] [❓ Help]
     // Row 2: Progress LineGauge + Total Duration + Volume
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -273,9 +262,9 @@ pub fn render_playerbar(
 
     // Row 0: Title — Artist [Opus 160kbps • Background Daemon ON]
     let (title, artist) = if let Some(t) = &player.current_track {
-        (t.title.as_str(), t.artist.as_str())
+        (t.title.clone(), t.artist.clone())
     } else {
-        ("Nenhuma faixa em reprodução", "Selecione uma faixa e pressione Enter")
+        (i18n.t("player.no_track"), i18n.t("player.select_track"))
     };
 
     let status_icon = match player.status {
@@ -286,23 +275,33 @@ pub fn render_playerbar(
     };
 
     let like_str = if player.is_liked { " ♥" } else { "" };
-    let shuffle_tag = if player.shuffle_enabled { " • 🔀 Aleatório" } else { "" };
+    let shuffle_tag = if player.shuffle_enabled {
+        i18n.t("player.shuffle_tag")
+    } else {
+        String::new()
+    };
 
     let top_line = Line::from(vec![
-        Span::styled(status_icon, theme.accent_style().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            status_icon,
+            theme.accent_style().add_modifier(Modifier::BOLD),
+        ),
         Span::styled(title, theme.title_style()),
         Span::styled(like_str, theme.liked_style()),
         Span::styled(" — ", theme.muted_style()),
         Span::styled(artist, theme.text_style()),
-        Span::styled(format!("  [Opus 160kbps • Daemon ON{}]", shuffle_tag), theme.muted_style()),
+        Span::styled(
+            format!("  [Opus 160kbps • Daemon ON{}]", shuffle_tag),
+            theme.muted_style(),
+        ),
     ]);
     f.render_widget(Paragraph::new(top_line), right_chunks[0]);
 
     // Row 1: Interactive Buttons Row
     let play_label = if player.status == PlaybackStatus::Playing {
-        "[⏸ Pause]"
+        i18n.t("player.pause_button")
     } else {
-        "[▶ Play ]"
+        i18n.t("player.play_button")
     };
 
     let like_style = if player.is_liked {
@@ -323,13 +322,13 @@ pub fn render_playerbar(
         Span::styled("[⏮ Prev]  ", btn_style),
         Span::styled(format!("{}  ", play_label), theme.playing_indicator_style()),
         Span::styled("[⏭ Next]   ", btn_style),
-        Span::styled("[♥ Like]   ", like_style),
-        Span::styled("[📻 Rádio]   ", theme.accent_style()),
-        Span::styled("[🔀 Aleat]   ", shuffle_style),
+        Span::styled(i18n.t("player.like_button"), like_style),
+        Span::styled(i18n.t("player.radio_button"), theme.accent_style()),
+        Span::styled(i18n.t("player.shuffle_button"), shuffle_style),
         Span::styled("[🔉 Vol-]  ", theme.text_style()),
         Span::styled("[🔊 Vol+]   ", theme.text_style()),
-        Span::styled("[👤 Conta]   ", theme.accent_style()),
-        Span::styled("[❓ Ajuda]", theme.muted_style()),
+        Span::styled(i18n.t("player.account_button"), theme.accent_style()),
+        Span::styled(i18n.t("player.help_button"), theme.muted_style()),
     ]);
     f.render_widget(Paragraph::new(buttons_line), right_chunks[1]);
 
@@ -356,7 +355,10 @@ pub fn render_playerbar(
         ])
         .split(right_chunks[2]);
 
-    f.render_widget(Paragraph::new(cur_text).style(theme.muted_style()), progress_chunks[0]);
+    f.render_widget(
+        Paragraph::new(cur_text).style(theme.muted_style()),
+        progress_chunks[0],
+    );
 
     let gauge = LineGauge::default()
         .filled_style(theme.accent_style().add_modifier(Modifier::BOLD))
@@ -365,10 +367,18 @@ pub fn render_playerbar(
         .line_set(ratatui::symbols::line::THICK);
     f.render_widget(gauge, progress_chunks[1]);
 
-    f.render_widget(Paragraph::new(dur_text).style(theme.muted_style()), progress_chunks[2]);
+    f.render_widget(
+        Paragraph::new(dur_text).style(theme.muted_style()),
+        progress_chunks[2],
+    );
 
     let vol_text = format!("🔊 Vol: {:>2}%", player.volume);
-    f.render_widget(Paragraph::new(vol_text).style(theme.text_style()).alignment(Alignment::Right), progress_chunks[3]);
+    f.render_widget(
+        Paragraph::new(vol_text)
+            .style(theme.text_style())
+            .alignment(Alignment::Right),
+        progress_chunks[3],
+    );
 }
 
 #[cfg(test)]
@@ -381,20 +391,50 @@ mod tests {
         // buttons start at area.x + 9 = 9; row is 10 + 1 (border) + 1 (row 1) = 12
         assert_eq!(get_player_button_at(9, 12, area), Some(PlayerButton::Prev));
         assert_eq!(get_player_button_at(18, 12, area), Some(PlayerButton::Prev));
-        assert_eq!(get_player_button_at(20, 12, area), Some(PlayerButton::PlayPause));
+        assert_eq!(
+            get_player_button_at(20, 12, area),
+            Some(PlayerButton::PlayPause)
+        );
         assert_eq!(get_player_button_at(32, 12, area), Some(PlayerButton::Next));
         assert_eq!(get_player_button_at(44, 12, area), Some(PlayerButton::Like));
-        assert_eq!(get_player_button_at(55, 12, area), Some(PlayerButton::Radio));
-        assert_eq!(get_player_button_at(65, 12, area), Some(PlayerButton::Shuffle));
-        assert_eq!(get_player_button_at(75, 12, area), Some(PlayerButton::Shuffle));
-        assert_eq!(get_player_button_at(80, 12, area), Some(PlayerButton::VolDown));
-        assert_eq!(get_player_button_at(92, 12, area), Some(PlayerButton::VolUp));
+        assert_eq!(
+            get_player_button_at(55, 12, area),
+            Some(PlayerButton::Radio)
+        );
+        assert_eq!(
+            get_player_button_at(65, 12, area),
+            Some(PlayerButton::Shuffle)
+        );
+        assert_eq!(
+            get_player_button_at(75, 12, area),
+            Some(PlayerButton::Shuffle)
+        );
+        assert_eq!(
+            get_player_button_at(80, 12, area),
+            Some(PlayerButton::VolDown)
+        );
+        assert_eq!(
+            get_player_button_at(92, 12, area),
+            Some(PlayerButton::VolUp)
+        );
         // Account button is at rel_x 94..=106 => col 103..=115
-        assert_eq!(get_player_button_at(105, 12, area), Some(PlayerButton::Account));
-        assert_eq!(get_player_button_at(114, 12, area), Some(PlayerButton::Account));
+        assert_eq!(
+            get_player_button_at(105, 12, area),
+            Some(PlayerButton::Account)
+        );
+        assert_eq!(
+            get_player_button_at(114, 12, area),
+            Some(PlayerButton::Account)
+        );
         // Help button is at rel_x 107..=118 => col 116..=127
-        assert_eq!(get_player_button_at(118, 12, area), Some(PlayerButton::Help));
-        assert_eq!(get_player_button_at(125, 12, area), Some(PlayerButton::Help));
+        assert_eq!(
+            get_player_button_at(118, 12, area),
+            Some(PlayerButton::Help)
+        );
+        assert_eq!(
+            get_player_button_at(125, 12, area),
+            Some(PlayerButton::Help)
+        );
         // Wrong row
         assert_eq!(get_player_button_at(65, 11, area), None);
     }
@@ -412,7 +452,11 @@ mod tests {
         // Playing returns non-zero values within 1..=16
         let playing = compute_visualizer_levels(PlaybackStatus::Playing, 25.5);
         for &lvl in &playing {
-            assert!(lvl >= 1 && lvl <= 16, "level should be in 1..=16, got {}", lvl);
+            assert!(
+                lvl >= 1 && lvl <= 16,
+                "level should be in 1..=16, got {}",
+                lvl
+            );
         }
 
         // Buffering returns wave with peak

@@ -93,7 +93,10 @@ impl App {
 
                 tokio::spawn(async move {
                     let _ = client.ensure_valid_token(Some(&auth_file)).await;
-                    let (title, tracks) = client.get_playlist_tracks(&pl_id).await.unwrap_or_else(|_| (pl.title.clone(), Vec::new()));
+                    let (title, tracks) = client
+                        .get_playlist_tracks(&pl_id)
+                        .await
+                        .unwrap_or_else(|_| (pl.title.clone(), Vec::new()));
                     let _ = tx.send(super::PlaylistLoadResult {
                         playlist_id: pl_id,
                         title,
@@ -113,15 +116,22 @@ impl App {
         self.is_oauth_polling = true;
         self.oauth_user_code = None;
         self.oauth_verification_url = None;
-        self.auth_message = Some(("⏳ Conectando ao Google...".to_string(), true));
+        self.auth_message = Some((self.i18n.t("auth.connecting"), true));
 
         let tx = self.oauth_tx.clone();
+        let i18n = self.i18n.clone();
 
         tokio::spawn(async move {
-            let res = match crate::innertube::oauth::request_device_code(crate::innertube::oauth::DEFAULT_CLIENT_ID).await {
+            let res = match crate::innertube::oauth::request_device_code(
+                crate::innertube::oauth::DEFAULT_CLIENT_ID,
+            )
+            .await
+            {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.send(super::OAuthProgress::Failed(format!("Erro ao solicitar código: {}", e)));
+                    let _ = tx.send(super::OAuthProgress::Failed(
+                        i18n.tf("auth.error_request_code", [("error", e)]),
+                    ));
                     return;
                 }
             };
@@ -141,7 +151,9 @@ impl App {
                     crate::innertube::oauth::DEFAULT_CLIENT_ID,
                     crate::innertube::oauth::DEFAULT_CLIENT_SECRET,
                     &res.device_code,
-                ).await {
+                )
+                .await
+                {
                     Ok(crate::innertube::oauth::PollResult::Success(tok)) => {
                         let _ = tx.send(super::OAuthProgress::TokenReady(tok));
                         return;
@@ -151,30 +163,39 @@ impl App {
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
                     Ok(crate::innertube::oauth::PollResult::Expired) => {
-                        let _ = tx.send(super::OAuthProgress::Failed("O código expirou. Pressione 'o' para reiniciar.".to_string()));
+                        let _ = tx.send(super::OAuthProgress::Failed(i18n.t("auth.code_expired")));
                         return;
                     }
                     Ok(crate::innertube::oauth::PollResult::Error(err)) => {
-                        let _ = tx.send(super::OAuthProgress::Failed(format!("Erro ao autorizar: {}", err)));
+                        let _ = tx.send(super::OAuthProgress::Failed(
+                            i18n.tf("auth.authorization_error", [("error", err)]),
+                        ));
                         return;
                     }
                     Err(e) => {
-                        let _ = tx.send(super::OAuthProgress::Failed(format!("Falha na rede: {}", e)));
+                        let _ = tx.send(super::OAuthProgress::Failed(
+                            i18n.tf("auth.network_failure", [("error", e)]),
+                        ));
                         return;
                     }
                 }
             }
-            let _ = tx.send(super::OAuthProgress::Failed("Tempo limite de autorização esgotado.".to_string()));
+            let _ = tx.send(super::OAuthProgress::Failed(
+                i18n.t("auth.authorization_timeout"),
+            ));
         });
     }
 
     pub async fn poll_oauth_progress(&mut self) {
         while let Ok(msg) = self.oauth_rx.try_recv() {
             match msg {
-                super::OAuthProgress::CodeReady { user_code, verification_url } => {
+                super::OAuthProgress::CodeReady {
+                    user_code,
+                    verification_url,
+                } => {
                     self.oauth_user_code = Some(user_code);
                     self.oauth_verification_url = Some(verification_url);
-                    self.auth_message = Some(("Código gerado! Digite o código no navegador.".to_string(), true));
+                    self.auth_message = Some((self.i18n.t("auth.code_generated"), true));
                 }
                 super::OAuthProgress::TokenReady(tok) => {
                     let now = std::time::SystemTime::now()
@@ -193,7 +214,7 @@ impl App {
                     self.is_oauth_polling = false;
                     self.oauth_user_code = None;
                     self.oauth_verification_url = None;
-                    self.auth_message = Some(("✓ Conta Google conectada com sucesso!".to_string(), true));
+                    self.auth_message = Some((self.i18n.t("auth.connected"), true));
 
                     self.spawn_account_sync();
                 }
@@ -219,7 +240,8 @@ impl App {
             if let Some(prof) = res.profile {
                 self.account_sync_error = None;
                 if !prof.avatar_url.is_empty() {
-                    let should_download = self.user_profile.as_ref().map(|p| &p.avatar_url) != Some(&prof.avatar_url);
+                    let should_download =
+                        self.user_profile.as_ref().map(|p| &p.avatar_url) != Some(&prof.avatar_url);
                     if should_download {
                         self.download_avatar(prof.avatar_url.clone());
                     }
@@ -232,7 +254,7 @@ impl App {
                 });
                 self.user_profile = Some(prof);
             } else {
-                self.account_sync_error = Some("Sessão ou cookie expirado no Google".to_string());
+                self.account_sync_error = Some(self.i18n.t("auth.session_expired"));
             }
 
             self.user_playlists = res.playlists.clone();
@@ -295,7 +317,11 @@ impl App {
             if self.current_loading_playlist_id.as_deref() == Some(&res.playlist_id) {
                 self.is_loading_tracks = false;
                 let mut tracks = res.tracks;
-                let liked_ids: HashSet<&str> = self.liked_tracks.iter().map(|t| t.video_id.as_str()).collect();
+                let liked_ids: HashSet<&str> = self
+                    .liked_tracks
+                    .iter()
+                    .map(|t| t.video_id.as_str())
+                    .collect();
                 for t in &mut tracks {
                     if liked_ids.contains(t.video_id.as_str()) {
                         t.is_liked = true;
@@ -337,7 +363,10 @@ impl App {
             self.previous_view = None;
             self.displayed_tracks = self.player_state.queue.clone();
             self.active_category_title = "Fila / Rádio Atual".to_string();
-            let cur_idx = self.player_state.queue_index.min(self.displayed_tracks.len().saturating_sub(1));
+            let cur_idx = self
+                .player_state
+                .queue_index
+                .min(self.displayed_tracks.len().saturating_sub(1));
             self.tracklist_state.select(Some(cur_idx));
         } else {
             let pl_idx = idx - 3;
@@ -357,7 +386,11 @@ impl App {
 
                 if !cached_tracks.is_empty() {
                     let mut tracks = cached_tracks;
-                    let liked_ids: HashSet<&str> = self.liked_tracks.iter().map(|t| t.video_id.as_str()).collect();
+                    let liked_ids: HashSet<&str> = self
+                        .liked_tracks
+                        .iter()
+                        .map(|t| t.video_id.as_str())
+                        .collect();
                     for t in &mut tracks {
                         if liked_ids.contains(t.video_id.as_str()) {
                             t.is_liked = true;
@@ -378,7 +411,10 @@ impl App {
 
                     tokio::spawn(async move {
                         let _ = client.ensure_valid_token(Some(&auth_file)).await;
-                        let (title, tracks) = client.get_playlist_tracks(&pl_id).await.unwrap_or_else(|_| (pl.title.clone(), Vec::new()));
+                        let (title, tracks) = client
+                            .get_playlist_tracks(&pl_id)
+                            .await
+                            .unwrap_or_else(|_| (pl.title.clone(), Vec::new()));
                         let _ = tx.send(super::PlaylistLoadResult {
                             playlist_id: pl_id,
                             title,
@@ -397,7 +433,10 @@ impl App {
             return;
         }
 
-        info!("Searching YouTube Music ({:?}) for query: {}", self.search_filter, q);
+        info!(
+            "Searching YouTube Music ({:?}) for query: {}",
+            self.search_filter, q
+        );
         match self.search_filter {
             SearchFilter::Tracks => {
                 if let Ok(tracks) = self.client.search(&q).await {
@@ -444,7 +483,8 @@ impl App {
                 info!("Opening album: {} ({})", album_title, browse_id);
                 if let Ok((title, tracks)) = self.client.get_album_tracks(&browse_id).await {
                     if !tracks.is_empty() {
-                        self.previous_view = Some((self.content_view, self.active_category_title.clone()));
+                        self.previous_view =
+                            Some((self.content_view, self.active_category_title.clone()));
                         self.displayed_tracks = tracks.clone();
                         self.active_category_title = format!("Álbum: \"{}\"", title);
                         self.content_view = ContentView::Tracks;
@@ -471,7 +511,8 @@ impl App {
                 info!("Opening artist: {} ({})", artist_name, browse_id);
                 if let Ok((name, tracks)) = self.client.get_artist_tracks(&browse_id).await {
                     if !tracks.is_empty() {
-                        self.previous_view = Some((self.content_view, self.active_category_title.clone()));
+                        self.previous_view =
+                            Some((self.content_view, self.active_category_title.clone()));
                         self.displayed_tracks = tracks.clone();
                         self.active_category_title = format!("Artista: \"{}\"", name);
                         self.content_view = ContentView::Tracks;
@@ -500,11 +541,8 @@ impl App {
                 self.active_category_title = format!("Rádio: \"{}\"", title);
                 self.tracklist_state.select(Some(0));
 
-                let _ = send_daemon_command(
-                    &self.config,
-                    DaemonCommand::QueueTracks(tracks, 0),
-                )
-                .await;
+                let _ =
+                    send_daemon_command(&self.config, DaemonCommand::QueueTracks(tracks, 0)).await;
             }
         }
     }

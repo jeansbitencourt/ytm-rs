@@ -1,8 +1,8 @@
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuthConfig {
@@ -36,7 +36,10 @@ impl AuthConfig {
     }
 
     pub fn is_authenticated(&self) -> bool {
-        self.cookies.is_some() || self.sapisid.is_some() || self.oauth_token.is_some() || self.refresh_token.is_some()
+        self.cookies.is_some()
+            || self.sapisid.is_some()
+            || self.oauth_token.is_some()
+            || self.refresh_token.is_some()
     }
 
     pub fn is_token_expired(&self) -> bool {
@@ -106,6 +109,9 @@ mod tests {
     #[test]
     fn test_extract_sapisid() {
         let cookies = "SID=123; SAPISID=abc_xyz_456; HSID=789";
-        assert_eq!(extract_sapisid_from_cookies(cookies), Some("abc_xyz_456".to_string()));
+        assert_eq!(
+            extract_sapisid_from_cookies(cookies),
+            Some("abc_xyz_456".to_string())
+        );
     }
 }

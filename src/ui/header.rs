@@ -6,6 +6,7 @@ use ratatui::Frame;
 use ratatui_image::StatefulImage;
 
 use crate::app::{ActivePanel, App};
+use crate::i18n::I18n;
 use crate::innertube::SearchFilter;
 
 pub fn get_search_filter_button_at(col: u16, row: u16, search_area: Rect) -> Option<SearchFilter> {
@@ -28,6 +29,34 @@ pub fn get_search_filter_button_at(col: u16, row: u16, search_area: Rect) -> Opt
     }
 }
 
+pub fn get_search_filter_button_at_for_language(
+    col: u16,
+    row: u16,
+    search_area: Rect,
+    i18n: &I18n,
+) -> Option<SearchFilter> {
+    if row > search_area.y + 1 {
+        return None;
+    }
+    let start_x = search_area.x + 1;
+    let mut cursor = start_x + display_width(&i18n.t("search.title")).saturating_sub(1);
+    for filter in SearchFilter::ALL {
+        let width = display_width(&format!("[{}]", filter.localized_label(i18n)));
+        if col >= cursor && col < cursor.saturating_add(width) {
+            return Some(filter);
+        }
+        cursor = cursor.saturating_add(width + 1);
+    }
+    None
+}
+
+fn display_width(value: &str) -> u16 {
+    value
+        .chars()
+        .map(|ch| if ch as u32 >= 0x1f000 { 2 } else { 1 })
+        .sum()
+}
+
 pub fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &mut App) {
     let theme = &app.theme;
 
@@ -41,14 +70,20 @@ pub fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &
     let chip = |filter: SearchFilter| {
         let is_active = app.search_filter == filter;
         if is_active {
-            Span::styled(format!("[{}]", filter.label()), theme.selected_row_style())
+            Span::styled(
+                format!("[{}]", filter.localized_label(&app.i18n)),
+                theme.selected_row_style(),
+            )
         } else {
-            Span::styled(format!("[{}]", filter.label()), theme.muted_style())
+            Span::styled(
+                format!("[{}]", filter.localized_label(&app.i18n)),
+                theme.muted_style(),
+            )
         }
     };
 
     let title_line = Line::from(vec![
-        Span::styled(" Busca [/] ── Filtro [Tab]: ", theme.title_style()),
+        Span::styled(app.i18n.t("search.title"), theme.title_style()),
         chip(SearchFilter::Tracks),
         Span::raw(" "),
         chip(SearchFilter::Albums),
@@ -68,11 +103,14 @@ pub fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &
         if is_search_focused {
             Span::styled("█", theme.accent_style())
         } else {
-            Span::styled("digite para buscar músicas, álbuns ou artistas...", theme.muted_style())
+            Span::styled(app.i18n.t("search.placeholder"), theme.muted_style())
         }
     } else {
         let cursor = if is_search_focused { "█" } else { "" };
-        Span::styled(format!("{}{}", app.search_input, cursor), theme.text_style())
+        Span::styled(
+            format!("{}{}", app.search_input, cursor),
+            theme.text_style(),
+        )
     };
 
     let search_line = Line::from(vec![
@@ -80,10 +118,7 @@ pub fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &
         search_text,
     ]);
 
-    let search_hint = Line::from(Span::styled(
-        "Enter: Buscar | Tab: Músicas/Álbuns/Artistas | Esc: Fechar",
-        theme.muted_style(),
-    ));
+    let search_hint = Line::from(Span::styled(app.i18n.t("search.hint"), theme.muted_style()));
 
     let search_p = Paragraph::new(vec![search_line, search_hint]).block(search_block);
     f.render_widget(search_p, search_area);
@@ -93,7 +128,10 @@ pub fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme.unfocused_border_style())
-        .title(Span::styled(" Perfil & Conexão [c] ", theme.title_style()))
+        .title(Span::styled(
+            app.i18n.t("profile.title"),
+            theme.title_style(),
+        ))
         .style(theme.default_block_style());
 
     let inner_status = status_block.inner(status_area);
@@ -103,7 +141,8 @@ pub fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &
         return;
     }
 
-    let has_avatar = app.avatar_protocol.is_some() && inner_status.width >= 24 && inner_status.height >= 2;
+    let has_avatar =
+        app.avatar_protocol.is_some() && inner_status.width >= 24 && inner_status.height >= 2;
 
     if has_avatar {
         let avatar_rect = Rect {
@@ -123,7 +162,9 @@ pub fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &
     } else {
         inner_status.x + 1
     };
-    let text_w = inner_status.width.saturating_sub(if has_avatar { 6 } else { 1 });
+    let text_w = inner_status
+        .width
+        .saturating_sub(if has_avatar { 6 } else { 1 });
     let text_rect = Rect {
         x: text_x,
         y: inner_status.y,
@@ -140,48 +181,62 @@ pub fn render_header(f: &mut Frame, search_area: Rect, status_area: Rect, app: &
             };
             Line::from(vec![
                 Span::styled("👤 ", theme.playing_indicator_style()),
-                Span::styled(&profile.name, theme.text_style().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    &profile.name,
+                    theme.text_style().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(handle_disp, theme.muted_style()),
             ])
         } else if app.is_syncing_account {
-            Line::from(vec![
-                Span::styled("⏳ Sincronizando perfil e biblioteca...", theme.accent_style()),
-            ])
+            Line::from(vec![Span::styled(
+                app.i18n.t("status.syncing"),
+                theme.accent_style(),
+            )])
         } else if app.account_sync_error.is_some() {
             let update_hint = if app.auth.has_oauth() {
-                "[c: Reconectar Google]"
+                app.i18n.t("status.reconnect")
             } else {
-                "[c: Atualizar cookie]"
+                app.i18n.t("status.update_cookie")
             };
             Line::from(vec![
-                Span::styled("⚠️ Sessão expirada ", theme.liked_style().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    app.i18n.t("status.expired"),
+                    theme.liked_style().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(update_hint, theme.accent_style()),
             ])
         } else {
-            Line::from(vec![
-                Span::styled("👤 Conectado ao YouTube Music", theme.playing_indicator_style().add_modifier(Modifier::BOLD)),
-            ])
+            Line::from(vec![Span::styled(
+                app.i18n.t("status.connected"),
+                theme.playing_indicator_style().add_modifier(Modifier::BOLD),
+            )])
         }
     } else {
         Line::from(vec![
-            Span::styled("👤 Modo Público ", theme.accent_style().add_modifier(Modifier::BOLD)),
-            Span::styled("[c: Conectar Conta Google]", theme.muted_style()),
+            Span::styled(
+                app.i18n.t("status.public"),
+                theme.accent_style().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(app.i18n.t("status.connect"), theme.muted_style()),
         ])
     };
 
     let (sync_text, sync_style) = if app.is_syncing_account {
-        (" | 🔄 Sincronizando...", theme.accent_style().add_modifier(Modifier::BOLD))
+        (
+            app.i18n.t("status.sync"),
+            theme.accent_style().add_modifier(Modifier::BOLD),
+        )
     } else {
-        (" | F5: Recarregar", theme.muted_style())
+        (app.i18n.t("status.reload"), theme.muted_style())
     };
 
     let system_line = Line::from(vec![
-        Span::styled("● Daemon: ", theme.muted_style()),
-        Span::styled("Ativo", theme.playing_indicator_style()),
-        Span::styled(" | MPRIS2: ", theme.muted_style()),
-        Span::styled("OK", theme.accent_style()),
+        Span::styled(app.i18n.t("status.daemon"), theme.muted_style()),
+        Span::styled(app.i18n.t("status.active"), theme.playing_indicator_style()),
+        Span::styled(app.i18n.t("status.mpris"), theme.muted_style()),
+        Span::styled(app.i18n.t("status.ok"), theme.accent_style()),
         Span::styled(sync_text, sync_style),
-        Span::styled(" | ?: Ajuda", theme.muted_style()),
+        Span::styled(app.i18n.t("status.help"), theme.muted_style()),
     ]);
 
     let text_p = Paragraph::new(vec![account_line, system_line]).alignment(Alignment::Left);

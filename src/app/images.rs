@@ -18,7 +18,13 @@ impl App {
         }
 
         while let Ok((vid, img)) = self.cover_rx.try_recv() {
-            if self.player_state.current_track.as_ref().map(|t| &t.video_id) == Some(&vid) {
+            if self
+                .player_state
+                .current_track
+                .as_ref()
+                .map(|t| &t.video_id)
+                == Some(&vid)
+            {
                 self.current_cover_image = Some((vid.clone(), img.clone()));
                 self.cover_protocol = Some(self.picker.new_resize_protocol(img));
             }
@@ -277,8 +283,22 @@ mod tests {
 
         // 2. Tracks view with offset larger than non-empty short list
         app.displayed_tracks = vec![
-            Track::new("id1", "Title 1", "Artist", "Album", 180, "https://thumb1.jpg"),
-            Track::new("id2", "Title 2", "Artist", "Album", 200, "https://thumb2.jpg"),
+            Track::new(
+                "id1",
+                "Title 1",
+                "Artist",
+                "Album",
+                180,
+                "https://thumb1.jpg",
+            ),
+            Track::new(
+                "id2",
+                "Title 2",
+                "Artist",
+                "Album",
+                200,
+                "https://thumb2.jpg",
+            ),
         ];
         *app.tracklist_state.offset_mut() = 50;
         app.update_thumbnails_if_needed(); // Must not panic!
