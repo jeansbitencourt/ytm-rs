@@ -18,7 +18,9 @@ BarWidget {
   property bool tuiOpen: false
   property bool isPlaying: false
   property bool isPaused: false
+  property bool isBuffering: false
   property bool isStopped: true
+  property string playbackError: ""
   property string trackTitle: ""
   property string trackArtist: ""
   property string trackAlbum: ""
@@ -27,9 +29,18 @@ BarWidget {
   property bool isLiked: false
   property double position: 0
   property double duration: 0
-  property string uiLanguage: "pt-BR"
+  property double lastStatusUpdatedAt: 0
+  property var widgetText: ({})
+  property string statusTooltip: ""
 
-  function tr(pt, en) { return root.uiLanguage.indexOf("en") === 0 ? en : pt }
+  function label(key, replacements) {
+    var text = String(root.widgetText[key] || "")
+    if (replacements) {
+      for (var name in replacements)
+        text = text.split("{" + name + "}").join(String(replacements[name]))
+    }
+    return text
+  }
 
   readonly property string statusPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/ytm-rs/status.json"
 
@@ -44,6 +55,23 @@ BarWidget {
     return (m < 10 ? "0" : "") + m + ":" + (remS < 10 ? "0" : "") + remS
   }
 
+  function markDaemonOffline() {
+    root.daemonRunning = false
+    root.tuiOpen = false
+    root.isPlaying = false
+    root.isPaused = false
+    root.isBuffering = false
+    root.isStopped = true
+    root.playbackError = ""
+    root.trackTitle = ""
+    root.trackArtist = ""
+    root.trackAlbum = ""
+    root.coverUrl = ""
+    root.position = 0
+    root.duration = 0
+    root.statusTooltip = root.label("offline_tooltip")
+  }
+
   function applyStatus(raw) {
     try {
       if (typeof raw !== "string" || raw.length > 32768) return
@@ -52,7 +80,10 @@ BarWidget {
       root.tuiOpen = data.tui_open === true
       root.isPlaying = data.playing === true
       root.isPaused = data.paused === true
-      root.isStopped = !root.isPlaying && !root.isPaused
+      root.isBuffering = data.buffering === true || data.status === "buffering"
+      root.isStopped = data.stopped === true || data.status === "stopped"
+      if (data.status === undefined) root.isStopped = !root.isPlaying && !root.isPaused
+      root.playbackError = root.sanitize(data.error || "", 180)
       root.trackTitle = root.sanitize(data.title || "", 120)
       root.trackArtist = root.sanitize(data.artist || "", 100)
       root.trackAlbum = root.sanitize(data.album || "", 100)
@@ -61,7 +92,9 @@ BarWidget {
       root.isLiked = data.liked === true
       root.position = Number(data.position || 0)
       root.duration = Number(data.duration || 0)
-      root.uiLanguage = root.sanitize(data.language || "pt-BR", 16)
+      root.lastStatusUpdatedAt = Number(data.updated_at_ms || 0)
+      root.widgetText = data.widget || ({})
+      root.statusTooltip = String(data.tooltip || "").replace(/[\r\t]+/g, " ").slice(0, 1000)
     } catch (e) {
       // Ignore transient errors while the file is being written atomically
     }
@@ -98,6 +131,16 @@ BarWidget {
     onTriggered: statusFile.reload()
   }
 
+  Timer {
+    interval: 2000
+    running: true
+    repeat: true
+    onTriggered: {
+      if (root.lastStatusUpdatedAt > 0 && Date.now() - root.lastStatusUpdatedAt > 6000)
+        root.markDaemonOffline()
+    }
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -105,21 +148,10 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.isPlaying ? "▶" : root.isPaused ? "⏸" : "🎵"
-    active: root.isPlaying || root.tuiOpen
+    text: root.isPlaying ? "▶" : root.isPaused ? "⏸" : root.isBuffering ? "⏳" : root.playbackError ? "⚠" : "🎵"
+    active: root.isPlaying || root.isPaused || root.isBuffering || root.tuiOpen
 
-    tooltipText: root.isPlaying
-      ? "Tocando: " + root.sanitize(root.trackArtist ? root.trackArtist + " - " + root.trackTitle : root.trackTitle, 140)
-        + (root.isLiked ? " ♥" : "")
-        + " · Vol: " + root.volume + "%\n" + root.tr("Botão esquerdo: Focar janela | Botão direito: Menu", "Left button: Focus window | Right button: Menu")
-      : root.isPaused
-      ? root.tr("Pausado: ", "Paused: ") + root.sanitize(root.trackArtist ? root.trackArtist + " - " + root.trackTitle : root.trackTitle, 140)
-        + " · Vol: " + root.volume + "%\n" + root.tr("Botão esquerdo: Focar janela | Botão direito: Menu", "Left button: Focus window | Right button: Menu")
-      : root.tuiOpen
-      ? root.tr("YTM-RS: Janela aberta (Pronto)\nBotão esquerdo: Focar janela | Botão direito: Menu", "YTM-RS: Window open (Ready)\nLeft button: Focus window | Right button: Menu")
-      : root.daemonRunning
-      ? root.tr("YTM-RS: Segundo plano ativo\nBotão esquerdo: Abrir | Botão direito: Menu", "YTM-RS: Running in background\nLeft button: Open | Right button: Menu")
-      : root.tr("YTM-RS (YouTube Music)\nBotão esquerdo: Abrir | Botão direito: Menu", "YTM-RS (YouTube Music)\nLeft button: Open | Right button: Menu")
+    tooltipText: root.statusTooltip
 
     onPressed: function(button) {
       if (button === Qt.LeftButton) {
@@ -192,8 +224,8 @@ BarWidget {
 
           Text {
             anchors.centerIn: parent
-            text: root.isPlaying ? "▶" : root.isPaused ? "⏸" : "♫"
-            color: Commons.Color.accent
+            text: root.isPlaying ? "▶" : root.isPaused ? "⏸" : root.isBuffering ? "⏳" : root.playbackError ? "⚠" : "♫"
+            color: root.playbackError ? "#E74C3C" : Commons.Color.accent
             font.pixelSize: Style.font.displayMedium
             font.bold: true
             visible: !coverImage.visible
@@ -206,7 +238,7 @@ BarWidget {
 
           Text {
             textFormat: Text.PlainText
-            text: root.trackTitle || (root.tuiOpen ? root.tr("YTM-RS: Pronto", "YTM-RS: Ready") : root.tr("Nenhuma música tocando", "No music playing"))
+            text: root.trackTitle || (root.tuiOpen ? root.label("ready") : root.label("no_track"))
             color: root.bar ? root.bar.foreground : "#ffffff"
             font.pixelSize: Style.font.subtitle
             font.bold: true
@@ -216,7 +248,7 @@ BarWidget {
 
           Text {
             textFormat: Text.PlainText
-            text: root.trackArtist || (root.tuiOpen ? root.tr("Janela do terminal aberta", "Terminal window open") : "YouTube Music TUI & Daemon")
+            text: root.trackArtist || (root.tuiOpen ? root.label("terminal_open") : root.label("description"))
             color: Qt.darker(root.bar ? root.bar.foreground : "#ffffff", 1.3)
             font.pixelSize: Style.font.bodySmall
             elide: Text.ElideRight
@@ -226,13 +258,17 @@ BarWidget {
           Text {
             textFormat: Text.PlainText
             text: root.isPlaying
-              ? root.tr("● Reproduzindo (", "● Playing (") + root.formatTime(root.position) + " / " + root.formatTime(root.duration) + ")"
+              ? root.label("playing_progress", { position: root.formatTime(root.position), duration: root.formatTime(root.duration) })
               : root.isPaused
-              ? root.tr("⏸ Pausado (", "⏸ Paused (") + root.formatTime(root.position) + " / " + root.formatTime(root.duration) + ")"
+              ? root.label("paused_progress", { position: root.formatTime(root.position), duration: root.formatTime(root.duration) })
+              : root.isBuffering
+              ? root.label("buffering_progress")
+              : root.playbackError
+              ? root.label("failed_progress")
               : root.tuiOpen
-              ? root.tr("● Janela ativa", "● Window active")
-              : root.tr("■ Inativo", "■ Idle")
-            color: root.isPlaying ? Commons.Color.accent : root.isPaused ? "#F39C12" : "#888888"
+              ? root.label("window_active")
+              : root.label("idle")
+            color: root.isPlaying || root.isBuffering ? Commons.Color.accent : root.isPaused ? "#F39C12" : root.playbackError ? "#E74C3C" : "#888888"
             font.pixelSize: Style.font.caption
           }
         }
@@ -264,7 +300,7 @@ BarWidget {
         }
 
         Button {
-          text: root.isPlaying ? root.tr("⏸ Pausar", "⏸ Pause") : root.tr("▶ Tocar", "▶ Play")
+          text: root.isBuffering ? root.label("buffering_button") : root.isPlaying ? root.label("pause_button") : root.label("play_button")
           onClicked: root.runCommand("ytm-rs ctl toggle")
         }
 
@@ -291,7 +327,7 @@ BarWidget {
 
         Text {
           anchors.verticalCenter: parent.verticalCenter
-          text: root.tr("Volume: ", "Volume: ") + root.volume + "%"
+          text: root.label("volume") + root.volume + "%"
           color: root.bar ? root.bar.foreground : "#ffffff"
           font.pixelSize: Style.font.bodySmall
         }
@@ -309,7 +345,7 @@ BarWidget {
 
         Button {
           width: (parent.width - Style.space(8)) / 2
-          text: root.tr("Focar Janela", "Focus Window")
+          text: root.label("focus_button")
           onClicked: {
             root.popupOpen = false
             root.runCommand("ytm-rs ctl focus")
@@ -318,7 +354,7 @@ BarWidget {
 
         Button {
           width: (parent.width - Style.space(8)) / 2
-          text: root.tr("Parar", "Stop")
+          text: root.label("stop_button")
           onClicked: root.runCommand("ytm-rs ctl stop")
         }
       }
