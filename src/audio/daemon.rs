@@ -16,6 +16,7 @@ use crate::i18n::I18n;
 use crate::innertube::Track;
 
 const MPV_START_TIMEOUT: Duration = Duration::from_secs(30);
+const MPV_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 fn current_i18n(config: &AppConfig) -> I18n {
     let preference = AppConfig::load()
@@ -413,19 +414,36 @@ impl AudioDaemon {
             let db = Arc::clone(&daemon.db);
             let result = tokio::select! {
                 biased;
-                _ = wait_for_generation_change(generation_watch, my_generation) => return,
+                _ = wait_for_generation_change(Arc::clone(&generation_watch), my_generation) => return,
                 result = resolve_stream_url(&video_id, &db) => result,
             };
 
             match result {
-                Ok(url) => {
+                Ok(resolved) => {
+                    if !daemon.is_current_generation(my_generation).await {
+                        return;
+                    }
+
+                    if !resolved.wait_before_use.is_zero() {
+                        debug!(
+                            "Waiting {} seconds for the stream URL for {} to become usable",
+                            resolved.wait_before_use.as_secs_f32(),
+                            video_id
+                        );
+                        tokio::select! {
+                            biased;
+                            _ = wait_for_generation_change(Arc::clone(&generation_watch), my_generation) => return,
+                            _ = tokio::time::sleep(resolved.wait_before_use) => {}
+                        }
+                    }
+
                     if !daemon.is_current_generation(my_generation).await {
                         return;
                     }
                     if let Err(e) = daemon
                         .mpv_tx
                         .send(MpvCommand::LoadFile {
-                            url,
+                            url: resolved.url,
                             generation: my_generation,
                         })
                         .await
@@ -475,41 +493,70 @@ impl AudioDaemon {
         track: Track,
         message: String,
     ) {
-        let should_retry = {
-            let generation = self.play_generation.lock().await;
+        enum RetryAction {
+            RefreshUrl,
+            Delayed(u64),
+            Exhausted,
+        }
+
+        let retry_action = {
+            let mut generation = self.play_generation.lock().await;
             if *generation != failed_generation {
                 return;
             }
             let mut retry_count = self.retry_count.lock().await;
-            if *retry_count == 0 {
-                *retry_count = 1;
-                true
-            } else {
-                false
+            match *retry_count {
+                0 => {
+                    *retry_count = 1;
+                    RetryAction::RefreshUrl
+                }
+                1 => {
+                    *retry_count = 2;
+                    *generation = generation.wrapping_add(1);
+                    RetryAction::Delayed(*generation)
+                }
+                _ => RetryAction::Exhausted,
             }
         };
 
-        if !should_retry {
-            self.fail_playback_if_current(
-                failed_generation,
-                format!("MPV could not play this track: {message}"),
-            )
-            .await;
-            return;
-        }
-
-        warn!(
-            "MPV failed to load {} ({}); invalidating its cached stream and retrying once",
-            track.video_id, message
-        );
-        {
-            let db = self.db.lock().await;
-            if let Err(e) = db.remove_stream_url(&track.video_id) {
-                warn!("Could not invalidate cached stream URL: {}", e);
+        match retry_action {
+            RetryAction::RefreshUrl => {
+                warn!(
+                    "MPV failed to load {} ({}); invalidating its cached stream and refreshing it",
+                    track.video_id, message
+                );
+                {
+                    let db = self.db.lock().await;
+                    if let Err(e) = db.remove_stream_url(&track.video_id) {
+                        warn!("Could not invalidate cached stream URL: {}", e);
+                    }
+                }
+                self.begin_track(track, Some(failed_generation), false, false)
+                    .await;
+            }
+            RetryAction::Delayed(expected_generation) => {
+                warn!(
+                    "MPV could not open the refreshed stream for {} ({}); retrying it after {} seconds",
+                    track.video_id,
+                    message,
+                    MPV_RETRY_DELAY.as_secs()
+                );
+                let daemon = Arc::clone(self);
+                tokio::spawn(async move {
+                    tokio::time::sleep(MPV_RETRY_DELAY).await;
+                    daemon
+                        .begin_track(track, Some(expected_generation), false, false)
+                        .await;
+                });
+            }
+            RetryAction::Exhausted => {
+                self.fail_playback_if_current(
+                    failed_generation,
+                    format!("MPV could not play this track: {message}"),
+                )
+                .await;
             }
         }
-        self.begin_track(track, Some(failed_generation), false, false)
-            .await;
     }
 
     async fn is_current_generation(&self, expected: u64) -> bool {

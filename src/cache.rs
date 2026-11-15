@@ -50,6 +50,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS stream_cache (
                 video_id TEXT PRIMARY KEY,
                 stream_url TEXT NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT 0,
                 expires_at INTEGER NOT NULL
             );
 
@@ -59,6 +60,26 @@ impl Database {
             );
             "#,
         )?;
+
+        let has_stream_cache_created_at = {
+            let mut stmt = self.conn.prepare("PRAGMA table_info(stream_cache)")?;
+            let mut rows = stmt.query([])?;
+            let mut found = false;
+            while let Some(row) = rows.next()? {
+                let col_name: String = row.get(1)?;
+                if col_name == "created_at" {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        if !has_stream_cache_created_at {
+            self.conn.execute(
+                "ALTER TABLE stream_cache ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
 
         // Ensure backward-compatible migration for playlists table
         let has_playlists = self
@@ -258,22 +279,31 @@ impl Database {
     }
 
     pub fn save_stream_url(&self, video_id: &str, stream_url: &str, ttl_secs: u64) -> Result<()> {
-        let expires_at = Self::now_ts() + ttl_secs;
+        let created_at = Self::now_ts();
+        let expires_at = created_at + ttl_secs;
         self.conn.execute(
-            "INSERT OR REPLACE INTO stream_cache (video_id, stream_url, expires_at) VALUES (?1, ?2, ?3)",
-            params![video_id, stream_url, expires_at],
+            "INSERT OR REPLACE INTO stream_cache (video_id, stream_url, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)",
+            params![video_id, stream_url, created_at, expires_at],
         )?;
         Ok(())
     }
 
     pub fn get_stream_url(&self, video_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .get_stream_url_with_age(video_id)?
+            .map(|(stream_url, _)| stream_url))
+    }
+
+    pub fn get_stream_url_with_age(&self, video_id: &str) -> Result<Option<(String, u64)>> {
         let now = Self::now_ts();
         let mut stmt = self.conn.prepare(
-            "SELECT stream_url FROM stream_cache WHERE video_id = ?1 AND expires_at > ?2",
+            "SELECT stream_url, created_at FROM stream_cache WHERE video_id = ?1 AND expires_at > ?2",
         )?;
         let mut rows = stmt.query(params![video_id, now])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(row.get(0)?))
+            let stream_url = row.get(0)?;
+            let created_at = row.get::<_, u64>(1)?;
+            Ok(Some((stream_url, now.saturating_sub(created_at))))
         } else {
             Ok(None)
         }

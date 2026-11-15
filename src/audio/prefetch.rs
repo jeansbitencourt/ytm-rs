@@ -6,17 +6,30 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 const YT_DLP_TIMEOUT: Duration = Duration::from_secs(45);
+const STREAM_URL_MIN_AGE: Duration = Duration::from_secs(5);
+const STREAM_URL_CACHE_TTL_SECS: u64 = 14_400;
 
-pub async fn resolve_stream_url(video_id: &str, db: &Arc<Mutex<Database>>) -> Result<String> {
+pub struct ResolvedStreamUrl {
+    pub url: String,
+    pub wait_before_use: Duration,
+}
+
+pub async fn resolve_stream_url(
+    video_id: &str,
+    db: &Arc<Mutex<Database>>,
+) -> Result<ResolvedStreamUrl> {
     // 1. Check local SQLite cache first
     {
         let db_guard = db.lock().await;
-        if let Ok(Some(cached_url)) = db_guard.get_stream_url(video_id) {
+        if let Ok(Some((cached_url, age_secs))) = db_guard.get_stream_url_with_age(video_id) {
             debug!("Stream URL cache hit for video_id: {}", video_id);
-            return Ok(cached_url);
+            return Ok(ResolvedStreamUrl {
+                url: cached_url,
+                wait_before_use: STREAM_URL_MIN_AGE.saturating_sub(Duration::from_secs(age_secs)),
+            });
         }
     }
 
@@ -64,12 +77,18 @@ pub async fn resolve_stream_url(video_id: &str, db: &Arc<Mutex<Database>>) -> Re
     }
 
     // Cache for 4 hours (14400 seconds)
-    {
+    let saved = {
         let db_guard = db.lock().await;
-        let _ = db_guard.save_stream_url(video_id, &url, 14400);
+        db_guard.save_stream_url(video_id, &url, STREAM_URL_CACHE_TTL_SECS)
+    };
+    if let Err(e) = saved {
+        warn!("Could not cache stream URL for {}: {}", video_id, e);
     }
 
-    Ok(url)
+    Ok(ResolvedStreamUrl {
+        url,
+        wait_before_use: STREAM_URL_MIN_AGE,
+    })
 }
 
 pub fn spawn_prefetch(video_id: String, db: Arc<Mutex<Database>>) {

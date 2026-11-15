@@ -357,6 +357,7 @@ impl MpvManager {
 
         Command::new("mpv")
             .arg("--no-video")
+            .arg("--no-ytdl")
             .arg("--idle=yes")
             .arg(&sock_arg)
             .arg("--audio-client-name=ytm-rs")
