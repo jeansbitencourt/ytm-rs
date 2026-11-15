@@ -424,7 +424,9 @@ impl AudioDaemon {
                         return;
                     }
 
-                    if !resolved.wait_before_use.is_zero() {
+                    // Try a newly resolved URL immediately on the first attempt.
+                    // If MPV rejects it, the retry path waits for the URL to age.
+                    if !reset_retry_count && !resolved.wait_before_use.is_zero() {
                         debug!(
                             "Waiting {} seconds for the stream URL for {} to become usable",
                             resolved.wait_before_use.as_secs_f32(),
@@ -494,8 +496,8 @@ impl AudioDaemon {
         message: String,
     ) {
         enum RetryAction {
-            RefreshUrl,
             Delayed(u64),
+            RefreshUrl,
             Exhausted,
         }
 
@@ -508,18 +510,33 @@ impl AudioDaemon {
             match *retry_count {
                 0 => {
                     *retry_count = 1;
-                    RetryAction::RefreshUrl
+                    *generation = generation.wrapping_add(1);
+                    RetryAction::Delayed(*generation)
                 }
                 1 => {
                     *retry_count = 2;
-                    *generation = generation.wrapping_add(1);
-                    RetryAction::Delayed(*generation)
+                    RetryAction::RefreshUrl
                 }
                 _ => RetryAction::Exhausted,
             }
         };
 
         match retry_action {
+            RetryAction::Delayed(expected_generation) => {
+                warn!(
+                    "MPV failed to load {} ({}); retrying the same stream after {} seconds",
+                    track.video_id,
+                    message,
+                    MPV_RETRY_DELAY.as_secs()
+                );
+                let daemon = Arc::clone(self);
+                tokio::spawn(async move {
+                    tokio::time::sleep(MPV_RETRY_DELAY).await;
+                    daemon
+                        .begin_track(track, Some(expected_generation), false, false)
+                        .await;
+                });
+            }
             RetryAction::RefreshUrl => {
                 warn!(
                     "MPV failed to load {} ({}); invalidating its cached stream and refreshing it",
@@ -533,21 +550,6 @@ impl AudioDaemon {
                 }
                 self.begin_track(track, Some(failed_generation), false, false)
                     .await;
-            }
-            RetryAction::Delayed(expected_generation) => {
-                warn!(
-                    "MPV could not open the refreshed stream for {} ({}); retrying it after {} seconds",
-                    track.video_id,
-                    message,
-                    MPV_RETRY_DELAY.as_secs()
-                );
-                let daemon = Arc::clone(self);
-                tokio::spawn(async move {
-                    tokio::time::sleep(MPV_RETRY_DELAY).await;
-                    daemon
-                        .begin_track(track, Some(expected_generation), false, false)
-                        .await;
-                });
             }
             RetryAction::Exhausted => {
                 self.fail_playback_if_current(
