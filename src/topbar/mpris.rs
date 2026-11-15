@@ -78,7 +78,9 @@ impl MprisServer {
                 progress: Some(pos),
             },
             PlaybackStatus::Stopped => MediaPlayback::Stopped,
-            PlaybackStatus::Buffering => MediaPlayback::Paused { progress: None },
+            // MPRIS has no buffering state. Report stopped until MPV confirms playback
+            // so media controls never claim audio is playing before it actually starts.
+            PlaybackStatus::Buffering => MediaPlayback::Stopped,
         };
 
         let _ = controls.set_playback(playback);

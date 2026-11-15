@@ -290,6 +290,15 @@ pub fn render_playerbar(
         Span::styled(like_str, theme.liked_style()),
         Span::styled(" — ", theme.muted_style()),
         Span::styled(artist, theme.text_style()),
+        if let Some(error) = &player.error_message {
+            let short_error: String = error.chars().take(48).collect();
+            Span::styled(
+                format!("  ⚠ {}", short_error),
+                Style::default().fg(theme.red).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw("")
+        },
         Span::styled(
             format!("  [Opus 160kbps • Daemon ON{}]", shuffle_tag),
             theme.muted_style(),
@@ -298,10 +307,10 @@ pub fn render_playerbar(
     f.render_widget(Paragraph::new(top_line), right_chunks[0]);
 
     // Row 1: Interactive Buttons Row
-    let play_label = if player.status == PlaybackStatus::Playing {
-        i18n.t("player.pause_button")
-    } else {
-        i18n.t("player.play_button")
+    let play_label = match player.status {
+        PlaybackStatus::Playing => i18n.t("player.pause_button"),
+        PlaybackStatus::Buffering => i18n.t("player.buffering"),
+        PlaybackStatus::Paused | PlaybackStatus::Stopped => i18n.t("player.play_button"),
     };
 
     let like_style = if player.is_liked {

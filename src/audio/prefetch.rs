@@ -1,9 +1,14 @@
 use crate::cache::Database;
 use anyhow::{Context, Result};
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 use tracing::{debug, error, info};
+
+const YT_DLP_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub async fn resolve_stream_url(video_id: &str, db: &Arc<Mutex<Database>>) -> Result<String> {
     // 1. Check local SQLite cache first
@@ -21,15 +26,26 @@ pub async fn resolve_stream_url(video_id: &str, db: &Arc<Mutex<Database>>) -> Re
     );
     let watch_url = format!("https://music.youtube.com/watch?v={}", video_id);
 
-    let output = Command::new("yt-dlp")
+    let child = Command::new("yt-dlp")
         .arg("-f")
         .arg("251/bestaudio[acodec=opus]/bestaudio")
         .arg("-g")
         .arg("--no-playlist")
         .arg(&watch_url)
-        .output()
-        .await
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
         .context("Failed to run yt-dlp. Make sure yt-dlp is installed and in PATH.")?;
+
+    let output = timeout(YT_DLP_TIMEOUT, child.wait_with_output())
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "yt-dlp timed out after {} seconds",
+                YT_DLP_TIMEOUT.as_secs()
+            )
+        })??;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);

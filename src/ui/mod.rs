@@ -87,7 +87,6 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .current_track
         .as_ref()
         .map(|t| t.video_id.as_str());
-    let is_playing = app.player_state.status == crate::audio::PlaybackStatus::Playing;
     app.tracklist_area = content_chunks[1];
 
     let category_title = app.localized_category_title();
@@ -100,7 +99,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 &category_title,
                 &app.displayed_tracks,
                 current_vid,
-                is_playing,
+                app.player_state.status,
                 &mut app.tracklist_state,
                 is_tracklist_focused,
                 &mut app.thumb_protocols,

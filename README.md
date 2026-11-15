@@ -70,6 +70,8 @@ ytm-rs ctl status
 ytm-rs ctl waybar
 ```
 
+O estado distingue `buffering`, `playing`, `paused` e `stopped`. Falhas ficam no campo `error_message` de `ctl status` e no log `${XDG_RUNTIME_DIR}/ytm-rs/daemon.log`.
+
 ---
 
 ## Autenticação Opcional (`ytm-rs auth`)

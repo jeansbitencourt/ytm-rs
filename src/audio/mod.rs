@@ -22,6 +22,8 @@ impl Default for PlaybackStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerState {
     pub status: PlaybackStatus,
+    #[serde(default)]
+    pub error_message: Option<String>,
     pub current_track: Option<Track>,
     pub position_secs: f64,
     pub duration_secs: f64,
@@ -38,6 +40,7 @@ impl Default for PlayerState {
     fn default() -> Self {
         Self {
             status: PlaybackStatus::Stopped,
+            error_message: None,
             current_track: None,
             position_secs: 0.0,
             duration_secs: 0.0,

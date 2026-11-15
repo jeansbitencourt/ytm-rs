@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -10,6 +10,7 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use std::fs::OpenOptions;
 use std::io::stdout;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,7 +21,7 @@ use tracing::info;
 
 use ytm_rs::app::App;
 use ytm_rs::audio::daemon::{ensure_daemon_running, send_daemon_command, AudioDaemon};
-use ytm_rs::audio::{DaemonCommand, DaemonResponse};
+use ytm_rs::audio::{DaemonCommand, DaemonResponse, PlayerState};
 use ytm_rs::config::AppConfig;
 use ytm_rs::innertube::auth::{extract_sapisid_from_cookies, AuthConfig};
 use ytm_rs::theme::{Theme, ThemeWatcher};
@@ -118,7 +119,19 @@ async fn main() -> Result<()> {
 }
 
 async fn run_daemon(config: AppConfig) -> Result<()> {
-    tracing_subscriber::fmt::init();
+    let log_path = config.runtime_dir.join("daemon.log");
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("Failed to open daemon log at {:?}", log_path))?;
+    let log_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(log_filter)
+        .with_writer(log_file)
+        .try_init()
+        .map_err(|e| anyhow::anyhow!("Failed to initialize daemon logging: {e}"))?;
     info!("Starting ytm-rs audio daemon...");
     let (daemon, mpv_events) = AudioDaemon::new(config).await?;
     let daemon = Arc::new(daemon);
@@ -618,25 +631,32 @@ async fn run_tui(config: AppConfig) -> Result<()> {
 
     // 3. Connect to daemon socket to subscribe to live updates
     let state_sock_path = config.state_sock.clone();
+    let daemon_config = config.clone();
     let app_state_shared = Arc::new(Mutex::new(app.player_state.clone()));
     let shared_for_sock = Arc::clone(&app_state_shared);
 
-    tokio::spawn(async move {
-        if let Ok(stream) = UnixStream::connect(&state_sock_path).await {
-            let (reader, mut writer) = stream.into_split();
-            let mut line = serde_json::to_string(&DaemonCommand::Subscribe).unwrap_or_default();
-            line.push('\n');
-            let _ = writer.write_all(line.as_bytes()).await;
-
-            let mut lines = BufReader::new(reader).lines();
-            while let Ok(Some(msg)) = lines.next_line().await {
-                if let Ok(DaemonResponse::State(new_state)) =
-                    serde_json::from_str::<DaemonResponse>(&msg)
-                {
-                    let mut s = shared_for_sock.lock().await;
-                    *s = *new_state;
+    let state_sync_task = tokio::spawn(async move {
+        loop {
+            if let Ok(stream) = UnixStream::connect(&state_sock_path).await {
+                let (reader, mut writer) = stream.into_split();
+                let mut line = serde_json::to_string(&DaemonCommand::Subscribe).unwrap_or_default();
+                line.push('\n');
+                if writer.write_all(line.as_bytes()).await.is_ok() {
+                    let mut lines = BufReader::new(reader).lines();
+                    while let Ok(Some(msg)) = lines.next_line().await {
+                        if let Ok(DaemonResponse::State(new_state)) =
+                            serde_json::from_str::<DaemonResponse>(&msg)
+                        {
+                            let mut state = shared_for_sock.lock().await;
+                            *state = *new_state;
+                        }
+                    }
                 }
             }
+
+            *shared_for_sock.lock().await = PlayerState::default();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let _ = ensure_daemon_running(&daemon_config).await;
         }
     });
 
@@ -712,6 +732,7 @@ async fn run_tui(config: AppConfig) -> Result<()> {
             break;
         }
     }
+    state_sync_task.abort();
 
     // Restore terminal
     disable_raw_mode()?;

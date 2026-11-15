@@ -7,6 +7,7 @@ use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::StatefulImage;
 use std::collections::{HashMap, HashSet};
 
+use crate::audio::PlaybackStatus;
 use crate::i18n::I18n;
 use crate::innertube::{AlbumSummary, ArtistSummary, Track};
 use crate::theme::Theme;
@@ -32,7 +33,7 @@ pub fn render_tracklist(
     title_text: &str,
     tracks: &[Track],
     current_video_id: Option<&str>,
-    is_playing: bool,
+    playback_status: PlaybackStatus,
     state: &mut ListState,
     is_focused: bool,
     thumb_protocols: &mut HashMap<String, Box<dyn StatefulProtocol>>,
@@ -95,10 +96,15 @@ pub fn render_tracklist(
             let has_thumb = thumb_protocols.contains_key(&track.video_id);
 
             let (num_str, num_style) = if is_current {
-                if is_playing {
-                    (format!("▶ {:02} ", i + 1), theme.playing_indicator_style())
-                } else {
-                    (format!("⏸ {:02} ", i + 1), theme.accent_style())
+                match playback_status {
+                    PlaybackStatus::Playing => {
+                        (format!("▶ {:02} ", i + 1), theme.playing_indicator_style())
+                    }
+                    PlaybackStatus::Paused => (format!("⏸ {:02} ", i + 1), theme.accent_style()),
+                    PlaybackStatus::Buffering => {
+                        (format!("⏳ {:02} ", i + 1), theme.accent_style())
+                    }
+                    PlaybackStatus::Stopped => (format!("■ {:02} ", i + 1), theme.muted_style()),
                 }
             } else if is_selected {
                 (format!("▸ {:02} ", i + 1), theme.accent_style())
