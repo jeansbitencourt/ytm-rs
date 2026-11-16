@@ -10,7 +10,7 @@ O `ytm-rs` consome menos de **18 MB de RAM**, funciona **imediatamente sem login
 
 ## Recursos Principais
 
-- **Arquitetura Client-Daemon**: O processo de áudio em background (`ytm-rs daemon`) toca em background via socket UNIX e gerencia o `mpv` headless. Ao fechar a janela da TUI (`q`), sua música continua tocando sem interrupção.
+- **Arquitetura Client-Daemon**: O processo de áudio em background (`ytm-rs daemon`) toca via socket UNIX e gerencia o `mpv` sem abrir uma janela durante a reprodução de áudio. Ao fechar a TUI (`q`), sua música continua tocando sem interrupção.
 - **Top Bar do Omarchy (Quickshell & Waybar)**:
   - Servidor **MPRIS2 D-Bus** nativo (`org.mpris.MediaPlayer2.ytmrs`) integrado ao widget de áudio padrão do sistema.
   - Widget nativo para a Top Bar (`jeansbitencourt.ytm-rs`) com suporte a **Clique Esquerdo** (Play/Pause), **Clique do Meio** (Favoritar/Like), **Clique Direito** (Abrir/Esconder TUI no Scratchpad) e **Scroll** (Ajuste de Volume).
@@ -19,6 +19,7 @@ O `ytm-rs` consome menos de **18 MB de RAM**, funciona **imediatamente sem login
 - **Detecção Inteligente de Terminal**: Compatível com múltiplos emuladores de terminal (**Foot**, **Kitty**, **Ghostty**, **Alacritty**, **WezTerm**, ou `$TERMINAL`). Renderiza capas de álbuns via **Sixel**, **Kitty Graphics Protocol** ou **Halfblocks** Unicode.
 - **Transições Instantâneas (Prefetching)**: Worker assíncrono resolve a URL de áudio Opus 251 da próxima faixa assim que a música atual atinge 80%. Para reprodução anônima, o comportamento existente é mantido; com cookies de playback, o prefetch começa desativado e pode ser habilitado explicitamente.
 - **Rádio Dinâmica Infinita**: Pressione `r` em qualquer faixa para gerar uma fila de rádio infinita baseada no algoritmo do YouTube Music (`RDAMVM{videoId}`).
+- **Vídeo em Janela Nativa**: Pressione `v` para abrir ou fechar a janela do `mpv` para a faixa atual. A opção aparece somente quando o YouTube Music identifica um vídeo musical oficial; a posição, pausa e volume continuam no daemon, e fechar a janela retoma o áudio.
 - **Atalhos Orientados a Teclado (Vim-like)**.
 - **Internacionalização**: a interface suporta Português (Brasil) e English por meio do catálogo centralizado do `rust-i18n`. Por padrão, acompanha o idioma escolhido no Omarchy (`~/.config/omarchy/language`) ou as variáveis de locale do Linux. Pressione `F2` na TUI para escolher `Seguir sistema`, `Português (Brasil)` ou `English`; a preferência fica em `~/.config/ytm-rs/config.toml` e a troca não interrompe a reprodução.
 
@@ -39,6 +40,7 @@ O `ytm-rs` consome menos de **18 MB de RAM**, funciona **imediatamente sem login
 | `f` | **Favoritar (Like)** | Adiciona ou remove dos favoritos (com notificação desktop) |
 | `a` | **Adicionar à Fila** | Enfileira a música selecionada para tocar a seguir |
 | `r` | **Rádio Infinita** | Inicia rádio contínua baseada na faixa selecionada |
+| `v` | **Vídeo** | Abre ou fecha a janela nativa de vídeo para a faixa atual, quando disponível |
 | `?` | **Ajuda** | Abre o menu com a lista de todos os atalhos |
 | `q` | **Esconder TUI** | Fecha a janela mantendo o áudio tocando em background |
 | `Q` ou `Ctrl+Q` | **Sair Total** | Encerra a janela TUI e o daemon de segundo plano |

@@ -14,6 +14,9 @@ const YT_DLP_TIMEOUT: Duration = Duration::from_secs(45);
 const STREAM_URL_MIN_AGE: Duration = Duration::from_secs(5);
 const STREAM_URL_CACHE_TTL_SECS: u64 = 14_400;
 const PREFERRED_FORMAT: &str = "251/bestaudio[acodec=opus]/bestaudio";
+// Prefer separate streams so yt-dlp can select the best video and audio
+// independently, then fall back to a muxed format when that is unavailable.
+const PREFERRED_VIDEO_FORMAT: &str = "bestvideo[height<=720]+bestaudio/best[height<=720]/best";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AvailableAudioFormat {
@@ -29,6 +32,7 @@ pub struct AvailableAudioFormat {
 pub struct ResolvedMedia {
     pub auth_source: PlaybackAuthSource,
     pub url: String,
+    pub external_audio_url: Option<String>,
     pub headers: Vec<(String, String)>,
     pub format: String,
     pub expires_at: Option<u64>,
@@ -40,6 +44,10 @@ impl std::fmt::Debug for ResolvedMedia {
         formatter
             .debug_struct("ResolvedMedia")
             .field("url", &"[redacted]")
+            .field(
+                "external_audio_url",
+                &self.external_audio_url.as_ref().map(|_| "[redacted]"),
+            )
             .field("headers", &"[redacted]")
             .field("format", &self.format)
             .field("expires_at", &self.expires_at)
@@ -70,6 +78,7 @@ pub async fn resolve_stream_url(
             return Ok(ResolvedMedia {
                 auth_source: PlaybackAuthSource::Disabled,
                 url: cached_url,
+                external_audio_url: None,
                 headers: Vec::new(),
                 format: "cached-anonymous".to_string(),
                 expires_at: None,
@@ -130,11 +139,144 @@ pub async fn resolve_stream_url(
     Ok(ResolvedMedia {
         auth_source: playback_auth.source,
         url,
+        external_audio_url: None,
         headers,
         format,
         expires_at,
         wait_before_use: STREAM_URL_MIN_AGE,
     })
+}
+
+pub async fn resolve_music_video_stream_url(
+    video_id: &str,
+    config: &AppConfig,
+) -> Result<ResolvedMedia> {
+    validate_video_id(video_id)?;
+    let playback_auth = config.load_playback_auth()?;
+    info!(
+        "Resolving music video via yt-dlp for video_id: {}",
+        video_id
+    );
+    let result = query_ytdlp_metadata(
+        video_id,
+        config,
+        &playback_auth.source,
+        Some(PREFERRED_VIDEO_FORMAT),
+    )
+    .await?;
+    let (url, external_audio_url, headers, format, expires_at) = parse_video_media(&result)?;
+
+    Ok(ResolvedMedia {
+        auth_source: playback_auth.source,
+        url,
+        external_audio_url,
+        headers,
+        format,
+        expires_at,
+        wait_before_use: STREAM_URL_MIN_AGE,
+    })
+}
+
+fn parse_video_media(
+    metadata: &Value,
+) -> Result<(
+    String,
+    Option<String>,
+    Vec<(String, String)>,
+    String,
+    Option<u64>,
+)> {
+    let requested_formats = metadata.get("requested_formats").and_then(Value::as_array);
+    if let Some(formats) = requested_formats {
+        let video_only = formats
+            .iter()
+            .find(|format| has_codec(format, "vcodec") && !has_codec(format, "acodec"));
+        let audio_only = formats
+            .iter()
+            .find(|format| has_codec(format, "acodec") && !has_codec(format, "vcodec"));
+        if let (Some(video), Some(audio)) = (video_only, audio_only) {
+            let video_url = required_format_url(video, "video")?;
+            let audio_url = required_format_url(audio, "audio")?;
+            let mut headers = parse_http_headers(video.get("http_headers"))?;
+            if headers.is_empty() {
+                headers = parse_http_headers(metadata.get("http_headers"))?;
+            }
+            let mut audio_headers = parse_http_headers(audio.get("http_headers"))?;
+            if audio_headers.is_empty() {
+                audio_headers = parse_http_headers(metadata.get("http_headers"))?;
+            }
+            merge_http_headers(&mut headers, audio_headers)?;
+
+            let format = formats
+                .iter()
+                .filter_map(|format| format.get("format_id").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("+");
+            let format = if format.is_empty() {
+                PREFERRED_VIDEO_FORMAT.to_string()
+            } else {
+                format
+            };
+            let expires_at = [
+                expiration_timestamp(&video_url),
+                expiration_timestamp(&audio_url),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            return Ok((video_url, Some(audio_url), headers, format, expires_at));
+        }
+    }
+
+    let url = metadata
+        .get("url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty())
+        .context("yt-dlp did not provide a compatible music video URL")?
+        .to_string();
+    let format = metadata
+        .get("format_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| PREFERRED_VIDEO_FORMAT.to_string());
+    let headers = parse_http_headers(metadata.get("http_headers"))?;
+    let expires_at = expiration_timestamp(&url);
+    Ok((url, None, headers, format, expires_at))
+}
+
+fn has_codec(format: &Value, codec: &str) -> bool {
+    format
+        .get(codec)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty() && value != "none")
+}
+
+fn required_format_url(format: &Value, kind: &str) -> Result<String> {
+    format
+        .get("url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string)
+        .with_context(|| format!("yt-dlp did not provide the selected {kind} stream URL"))
+}
+
+fn merge_http_headers(
+    headers: &mut Vec<(String, String)>,
+    additional: Vec<(String, String)>,
+) -> Result<()> {
+    for (name, value) in additional {
+        if let Some((_, existing_value)) = headers
+            .iter()
+            .find(|(existing_name, _)| existing_name.eq_ignore_ascii_case(&name))
+        {
+            if existing_value != &value {
+                anyhow::bail!("yt-dlp returned conflicting headers for selected media streams");
+            }
+        } else {
+            headers.push((name, value));
+        }
+    }
+    Ok(())
 }
 
 pub async fn inspect_stream_formats(
@@ -390,6 +532,7 @@ mod tests {
         let media = ResolvedMedia {
             auth_source: PlaybackAuthSource::NetscapeCookieFile,
             url: "https://example.test/audio?sig=private".to_string(),
+            external_audio_url: None,
             headers: vec![("Cookie".to_string(), "session=private".to_string())],
             format: "251".to_string(),
             expires_at: None,

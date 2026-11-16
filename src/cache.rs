@@ -33,6 +33,7 @@ impl Database {
                 album TEXT NOT NULL,
                 duration_secs INTEGER NOT NULL,
                 thumbnail_url TEXT NOT NULL,
+                music_video_id TEXT,
                 added_at INTEGER NOT NULL
             );
 
@@ -44,6 +45,7 @@ impl Database {
                 album TEXT NOT NULL,
                 duration_secs INTEGER NOT NULL,
                 thumbnail_url TEXT NOT NULL,
+                music_video_id TEXT,
                 played_at INTEGER NOT NULL
             );
 
@@ -60,6 +62,13 @@ impl Database {
             );
             "#,
         )?;
+
+        for (table, column) in [
+            ("liked_tracks", "music_video_id"),
+            ("play_history", "music_video_id"),
+        ] {
+            self.ensure_column(table, column, "TEXT")?;
+        }
 
         let has_stream_cache_created_at = {
             let mut stmt = self.conn.prepare("PRAGMA table_info(stream_cache)")?;
@@ -161,12 +170,31 @@ impl Database {
                 duration_secs INTEGER NOT NULL,
                 duration_text TEXT NOT NULL DEFAULT '',
                 thumbnail_url TEXT NOT NULL DEFAULT '',
+                music_video_id TEXT,
                 position INTEGER NOT NULL,
                 PRIMARY KEY (playlist_id, position)
             );
             "#,
         )?;
 
+        self.ensure_column("playlist_tracks", "music_video_id", "TEXT")?;
+
+        Ok(())
+    }
+
+    fn ensure_column(&self, table: &str, column: &str, definition: &str) -> Result<()> {
+        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let col_name: String = row.get(1)?;
+            if col_name == column {
+                return Ok(());
+            }
+        }
+        self.conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+            [],
+        )?;
         Ok(())
     }
 
@@ -180,8 +208,8 @@ impl Database {
     pub fn add_liked_track(&self, track: &Track) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT OR REPLACE INTO liked_tracks (video_id, title, artist, album, duration_secs, thumbnail_url, added_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT OR REPLACE INTO liked_tracks (video_id, title, artist, album, duration_secs, thumbnail_url, music_video_id, added_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 track.video_id,
@@ -190,6 +218,7 @@ impl Database {
                 track.album,
                 track.duration_secs,
                 track.thumbnail_url,
+                track.music_video_id,
                 Self::now_ts()
             ],
         )?;
@@ -212,9 +241,19 @@ impl Database {
         Ok(exists)
     }
 
+    pub fn update_music_video_id(&self, video_id: &str, music_video_id: &str) -> Result<()> {
+        for table in ["liked_tracks", "play_history", "playlist_tracks"] {
+            self.conn.execute(
+                &format!("UPDATE {table} SET music_video_id = ?1 WHERE video_id = ?2"),
+                params![music_video_id, video_id],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn get_liked_tracks(&self) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT video_id, title, artist, album, duration_secs, thumbnail_url FROM liked_tracks ORDER BY added_at DESC",
+            "SELECT video_id, title, artist, album, duration_secs, thumbnail_url, music_video_id FROM liked_tracks ORDER BY added_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             let mut track = Track::new(
@@ -224,7 +263,8 @@ impl Database {
                 row.get::<_, String>(3)?,
                 row.get::<_, u32>(4)?,
                 row.get::<_, String>(5)?,
-            );
+            )
+            .with_music_video_id(row.get::<_, Option<String>>(6)?);
             track.is_liked = true;
             Ok(track)
         })?;
@@ -239,8 +279,8 @@ impl Database {
     pub fn add_history(&self, track: &Track) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO play_history (video_id, title, artist, album, duration_secs, thumbnail_url, played_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO play_history (video_id, title, artist, album, duration_secs, thumbnail_url, music_video_id, played_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 track.video_id,
@@ -249,6 +289,7 @@ impl Database {
                 track.album,
                 track.duration_secs,
                 track.thumbnail_url,
+                track.music_video_id,
                 Self::now_ts()
             ],
         )?;
@@ -257,7 +298,7 @@ impl Database {
 
     pub fn get_history(&self, limit: usize) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT video_id, title, artist, album, duration_secs, thumbnail_url FROM play_history ORDER BY played_at DESC, id DESC LIMIT ?1",
+            "SELECT video_id, title, artist, album, duration_secs, thumbnail_url, music_video_id FROM play_history ORDER BY played_at DESC, id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| {
             let track = Track::new(
@@ -267,7 +308,8 @@ impl Database {
                 row.get::<_, String>(3)?,
                 row.get::<_, u32>(4)?,
                 row.get::<_, String>(5)?,
-            );
+            )
+            .with_music_video_id(row.get::<_, Option<String>>(6)?);
             Ok(track)
         })?;
 
@@ -324,8 +366,8 @@ impl Database {
         {
             let mut stmt = tx.prepare(
                 r#"
-                INSERT INTO liked_tracks (video_id, title, artist, album, duration_secs, thumbnail_url, added_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                INSERT INTO liked_tracks (video_id, title, artist, album, duration_secs, thumbnail_url, music_video_id, added_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                 "#,
             )?;
             for (idx, track) in tracks.iter().enumerate() {
@@ -337,6 +379,7 @@ impl Database {
                     track.album,
                     track.duration_secs,
                     track.thumbnail_url,
+                    track.music_video_id,
                     ts
                 ])?;
             }
@@ -401,8 +444,8 @@ impl Database {
         {
             let mut stmt = tx.prepare(
                 r#"
-                INSERT INTO playlist_tracks (playlist_id, video_id, title, artist, album, duration_secs, duration_text, thumbnail_url, position)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                INSERT INTO playlist_tracks (playlist_id, video_id, title, artist, album, duration_secs, duration_text, thumbnail_url, music_video_id, position)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                 "#,
             )?;
             for (idx, track) in tracks.iter().enumerate() {
@@ -415,6 +458,7 @@ impl Database {
                     track.duration_secs,
                     track.duration_text,
                     track.thumbnail_url,
+                    track.music_video_id,
                     idx as i64
                 ])?;
             }
@@ -426,7 +470,7 @@ impl Database {
     pub fn get_playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT video_id, title, artist, album, duration_secs, duration_text, thumbnail_url
+            SELECT video_id, title, artist, album, duration_secs, duration_text, thumbnail_url, music_video_id
             FROM playlist_tracks
             WHERE playlist_id = ?1
             ORDER BY position ASC
@@ -440,7 +484,8 @@ impl Database {
                 row.get::<_, String>(3)?,
                 row.get::<_, u32>(4)?,
                 row.get::<_, String>(6)?,
-            );
+            )
+            .with_music_video_id(row.get::<_, Option<String>>(7)?);
             track.duration_text = row.get::<_, String>(5)?;
             Ok(track)
         })?;

@@ -10,7 +10,13 @@ impl App {
     pub async fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<()> {
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
             // Check playerbar button clicks
-            if let Some(btn) = get_player_button_at(mouse.column, mouse.row, self.playerbar_area) {
+            if let Some(btn) = get_player_button_at(
+                mouse.column,
+                mouse.row,
+                self.playerbar_area,
+                &self.player_state,
+                &self.i18n,
+            ) {
                 match btn {
                     PlayerButton::Prev => {
                         let _ = send_daemon_command(&self.config, DaemonCommand::Prev).await;
@@ -31,6 +37,10 @@ impl App {
                             let title = track.title.clone();
                             self.start_radio_for_track(&vid, &title).await;
                         }
+                    }
+                    PlayerButton::Video => {
+                        let _ =
+                            send_daemon_command(&self.config, DaemonCommand::ToggleVideoMode).await;
                     }
                     PlayerButton::Shuffle => {
                         let _ =

@@ -196,6 +196,68 @@ impl InnertubeClient {
         Ok(parse_radio_results(&body))
     }
 
+    /// Resolves the exact song/video alternate exposed by YouTube Music's
+    /// authenticated watch playlist. This does not search by title.
+    pub async fn music_video_counterpart_id(&self, video_id: &str) -> Result<Option<String>> {
+        if video_id.len() != 11
+            || !video_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        {
+            anyhow::bail!("Invalid YouTube video ID");
+        }
+
+        let oauth_only =
+            self.auth.has_oauth() && self.auth.cookies.is_none() && self.auth.sapisid.is_none();
+        let (url, context, headers) = if oauth_only {
+            (
+                format!("{}/next", YOUTUBE_BASE_URL),
+                Self::tv_context(),
+                self.build_tv_headers(),
+            )
+        } else {
+            (
+                format!("{}/next", INNERTUBE_BASE_URL),
+                Self::default_context(),
+                self.build_web_headers(),
+            )
+        };
+        let payload = json!({
+            "context": context,
+            "videoId": video_id,
+            "playlistId": format!("RDAMVM{video_id}"),
+            "enablePersistentPlaylistPanel": true,
+            "isAudioOnly": true,
+            "tunerSettingValue": "AUTOMIX_SETTING_NORMAL",
+            "watchEndpointMusicSupportedConfigs": {
+                "watchEndpointMusicConfig": {
+                    "hasPersistentPlaylistPanel": true,
+                    "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                }
+            }
+        });
+
+        let response = self
+            .http
+            .post(url)
+            .headers(headers)
+            .json(&payload)
+            .send()
+            .await
+            .context("Failed to request the YouTube Music watch playlist")?
+            .error_for_status()
+            .context("YouTube Music rejected the watch playlist request")?;
+        let body: Value = response
+            .json()
+            .await
+            .context("Failed to parse the YouTube Music watch playlist response")?;
+        if let Some(video_id) = parse_music_video_counterpart(&body, video_id) {
+            return Ok(Some(video_id));
+        }
+
+        Ok(None)
+    }
+
     pub async fn browse_continuation(&self, continuation: &str) -> Result<Value> {
         let (url, payload, headers) = if self.auth.has_oauth() {
             (

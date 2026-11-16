@@ -16,6 +16,8 @@ pub struct UserProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Track {
     pub video_id: String,
+    #[serde(default)]
+    pub music_video_id: Option<String>,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -37,6 +39,7 @@ impl Track {
         let duration_text = format_duration(duration_secs);
         Self {
             video_id: video_id.into(),
+            music_video_id: None,
             title: title.into(),
             artist: artist.into(),
             album: album.into(),
@@ -45,6 +48,11 @@ impl Track {
             thumbnail_url: thumbnail_url.into(),
             is_liked: false,
         }
+    }
+
+    pub fn with_music_video_id(mut self, music_video_id: Option<String>) -> Self {
+        self.music_video_id = music_video_id;
+        self
     }
 }
 

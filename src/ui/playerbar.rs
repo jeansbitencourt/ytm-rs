@@ -15,6 +15,7 @@ pub enum PlayerButton {
     Next,
     Like,
     Radio,
+    Video,
     Shuffle,
     VolDown,
     VolUp,
@@ -22,7 +23,34 @@ pub enum PlayerButton {
     Help,
 }
 
-pub fn get_player_button_at(col: u16, row: u16, playerbar_area: Rect) -> Option<PlayerButton> {
+fn player_button_specs(player: &PlayerState, i18n: &I18n) -> Vec<(PlayerButton, String)> {
+    let play_label = match player.status {
+        PlaybackStatus::Playing => i18n.t("player.pause_button"),
+        PlaybackStatus::Buffering => i18n.t("player.buffering"),
+        PlaybackStatus::Paused | PlaybackStatus::Stopped => i18n.t("player.play_button"),
+    };
+    vec![
+        (PlayerButton::Prev, "[⏮ Prev]  ".to_string()),
+        (PlayerButton::PlayPause, format!("{}  ", play_label)),
+        (PlayerButton::Next, "[⏭ Next]   ".to_string()),
+        (PlayerButton::Like, i18n.t("player.like_button")),
+        (PlayerButton::Radio, i18n.t("player.radio_button")),
+        (PlayerButton::Video, i18n.t("player.video_button")),
+        (PlayerButton::Shuffle, i18n.t("player.shuffle_button")),
+        (PlayerButton::VolDown, "[🔉 Vol-]  ".to_string()),
+        (PlayerButton::VolUp, "[🔊 Vol+]   ".to_string()),
+        (PlayerButton::Account, i18n.t("player.account_button")),
+        (PlayerButton::Help, i18n.t("player.help_button")),
+    ]
+}
+
+pub fn get_player_button_at(
+    col: u16,
+    row: u16,
+    playerbar_area: Rect,
+    player: &PlayerState,
+    i18n: &I18n,
+) -> Option<PlayerButton> {
     let inner_y = playerbar_area.y + 1;
     let buttons_row = inner_y + 1;
     if row != buttons_row {
@@ -30,34 +58,19 @@ pub fn get_player_button_at(col: u16, row: u16, playerbar_area: Rect) -> Option<
     }
 
     let start_x = playerbar_area.x + 9;
-    if col < start_x {
+    if col < start_x || col >= playerbar_area.right().saturating_sub(1) {
         return None;
     }
 
-    let rel_x = col - start_x;
-    if rel_x <= 9 {
-        Some(PlayerButton::Prev)
-    } else if (10..=20).contains(&rel_x) {
-        Some(PlayerButton::PlayPause)
-    } else if (21..=31).contains(&rel_x) {
-        Some(PlayerButton::Next)
-    } else if (32..=42).contains(&rel_x) {
-        Some(PlayerButton::Like)
-    } else if (43..=55).contains(&rel_x) {
-        Some(PlayerButton::Radio)
-    } else if (56..=68).contains(&rel_x) {
-        Some(PlayerButton::Shuffle)
-    } else if (69..=80).contains(&rel_x) {
-        Some(PlayerButton::VolDown)
-    } else if (81..=93).contains(&rel_x) {
-        Some(PlayerButton::VolUp)
-    } else if (94..=106).contains(&rel_x) {
-        Some(PlayerButton::Account)
-    } else if (107..=118).contains(&rel_x) {
-        Some(PlayerButton::Help)
-    } else {
-        None
+    let mut button_start = start_x;
+    for (button, label) in player_button_specs(player, i18n) {
+        let width = Line::from(label.as_str()).width().min(u16::MAX as usize) as u16;
+        if col >= button_start && col < button_start.saturating_add(width) {
+            return Some(button);
+        }
+        button_start = button_start.saturating_add(width);
     }
+    None
 }
 
 const BLOCKS: [char; 9] = [' ', ' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -290,7 +303,11 @@ pub fn render_playerbar(
         Span::styled(like_str, theme.liked_style()),
         Span::styled(" — ", theme.muted_style()),
         Span::styled(artist, theme.text_style()),
-        if let Some(error) = &player.error_message {
+        if let Some(error) = player
+            .error_message
+            .as_ref()
+            .or(player.video_error_message.as_ref())
+        {
             let short_error: String = error.chars().take(48).collect();
             Span::styled(
                 format!("  ⚠ {}", short_error),
@@ -307,12 +324,6 @@ pub fn render_playerbar(
     f.render_widget(Paragraph::new(top_line), right_chunks[0]);
 
     // Row 1: Interactive Buttons Row
-    let play_label = match player.status {
-        PlaybackStatus::Playing => i18n.t("player.pause_button"),
-        PlaybackStatus::Buffering => i18n.t("player.buffering"),
-        PlaybackStatus::Paused | PlaybackStatus::Stopped => i18n.t("player.play_button"),
-    };
-
     let like_style = if player.is_liked {
         theme.liked_style()
     } else {
@@ -325,20 +336,34 @@ pub fn render_playerbar(
         theme.muted_style()
     };
 
-    let btn_style = theme.focused_border_style();
+    let video_style = if player.video_mode {
+        theme.playing_indicator_style().add_modifier(Modifier::BOLD)
+    } else if player.current_track.is_some() {
+        // Cached tracks may not yet contain counterpart metadata. The daemon
+        // resolves the exact YouTube Music counterpart when the user asks.
+        theme.accent_style()
+    } else {
+        theme.muted_style()
+    };
 
-    let buttons_line = Line::from(vec![
-        Span::styled("[⏮ Prev]  ", btn_style),
-        Span::styled(format!("{}  ", play_label), theme.playing_indicator_style()),
-        Span::styled("[⏭ Next]   ", btn_style),
-        Span::styled(i18n.t("player.like_button"), like_style),
-        Span::styled(i18n.t("player.radio_button"), theme.accent_style()),
-        Span::styled(i18n.t("player.shuffle_button"), shuffle_style),
-        Span::styled("[🔉 Vol-]  ", theme.text_style()),
-        Span::styled("[🔊 Vol+]   ", theme.text_style()),
-        Span::styled(i18n.t("player.account_button"), theme.accent_style()),
-        Span::styled(i18n.t("player.help_button"), theme.muted_style()),
-    ]);
+    let btn_style = theme.focused_border_style();
+    let button_spans = player_button_specs(player, i18n)
+        .into_iter()
+        .map(|(button, label)| {
+            let style = match button {
+                PlayerButton::Prev | PlayerButton::Next => btn_style,
+                PlayerButton::PlayPause => theme.playing_indicator_style(),
+                PlayerButton::Like => like_style,
+                PlayerButton::Radio | PlayerButton::Account => theme.accent_style(),
+                PlayerButton::Video => video_style,
+                PlayerButton::Shuffle => shuffle_style,
+                PlayerButton::VolDown | PlayerButton::VolUp => theme.text_style(),
+                PlayerButton::Help => theme.muted_style(),
+            };
+            Span::styled(label, style)
+        })
+        .collect::<Vec<_>>();
+    let buttons_line = Line::from(button_spans);
     f.render_widget(Paragraph::new(buttons_line), right_chunks[1]);
 
     // Row 2: 01:42 ━━━●──────── 04:18  🔊 Vol: 85%
@@ -397,55 +422,25 @@ mod tests {
     #[test]
     fn test_button_hit_detection() {
         let area = Rect::new(0, 10, 130, 5);
-        // buttons start at area.x + 9 = 9; row is 10 + 1 (border) + 1 (row 1) = 12
-        assert_eq!(get_player_button_at(9, 12, area), Some(PlayerButton::Prev));
-        assert_eq!(get_player_button_at(18, 12, area), Some(PlayerButton::Prev));
-        assert_eq!(
-            get_player_button_at(20, 12, area),
-            Some(PlayerButton::PlayPause)
-        );
-        assert_eq!(get_player_button_at(32, 12, area), Some(PlayerButton::Next));
-        assert_eq!(get_player_button_at(44, 12, area), Some(PlayerButton::Like));
-        assert_eq!(
-            get_player_button_at(55, 12, area),
-            Some(PlayerButton::Radio)
-        );
-        assert_eq!(
-            get_player_button_at(65, 12, area),
-            Some(PlayerButton::Shuffle)
-        );
-        assert_eq!(
-            get_player_button_at(75, 12, area),
-            Some(PlayerButton::Shuffle)
-        );
-        assert_eq!(
-            get_player_button_at(80, 12, area),
-            Some(PlayerButton::VolDown)
-        );
-        assert_eq!(
-            get_player_button_at(92, 12, area),
-            Some(PlayerButton::VolUp)
-        );
-        // Account button is at rel_x 94..=106 => col 103..=115
-        assert_eq!(
-            get_player_button_at(105, 12, area),
-            Some(PlayerButton::Account)
-        );
-        assert_eq!(
-            get_player_button_at(114, 12, area),
-            Some(PlayerButton::Account)
-        );
-        // Help button is at rel_x 107..=118 => col 116..=127
-        assert_eq!(
-            get_player_button_at(118, 12, area),
-            Some(PlayerButton::Help)
-        );
-        assert_eq!(
-            get_player_button_at(125, 12, area),
-            Some(PlayerButton::Help)
-        );
-        // Wrong row
-        assert_eq!(get_player_button_at(65, 11, area), None);
+        let player = PlayerState::default();
+        let i18n = I18n::new(Default::default());
+        let mut button_start = area.x + 9;
+
+        for (button, label) in player_button_specs(&player, &i18n) {
+            let width = Line::from(label.as_str()).width() as u16;
+            if width > 0 && button_start + width <= area.right() {
+                let col = button_start + width / 2;
+                assert_eq!(
+                    get_player_button_at(col, 12, area, &player, &i18n),
+                    Some(button)
+                );
+            }
+            button_start += width;
+        }
+
+        assert_eq!(get_player_button_at(65, 11, area, &player, &i18n), None);
+        assert_eq!(get_player_button_at(8, 12, area, &player, &i18n), None);
+        assert_eq!(get_player_button_at(130, 12, area, &player, &i18n), None);
     }
 
     #[test]

@@ -72,7 +72,7 @@ pub fn render_help_modal(f: &mut Frame, area: Rect, app: &App) {
 
     // Centered modal calculation
     let width = 74.min(area.width.saturating_sub(4));
-    let height = 26.min(area.height.saturating_sub(2));
+    let height = 27.min(area.height.saturating_sub(2));
 
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
@@ -101,6 +101,7 @@ pub fn render_help_modal(f: &mut Frame, area: Rect, app: &App) {
         ("help.next_keys", "help.next_desc"),
         ("help.volume_keys", "help.volume_desc"),
         ("help.like_keys", "help.like_desc"),
+        ("help.video_keys", "help.video_desc"),
         ("help.shuffle_keys", "help.shuffle_desc"),
         ("help.queue_keys", "help.queue_desc"),
         ("help.radio_keys", "help.radio_desc"),

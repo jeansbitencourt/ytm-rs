@@ -8,11 +8,13 @@ use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
 use super::mpv_ipc::{MpvCommand, MpvEvent, MpvManager};
-use super::prefetch::{resolve_stream_url, spawn_prefetch};
+use super::prefetch::{resolve_music_video_stream_url, resolve_stream_url, spawn_prefetch};
 use super::{DaemonCommand, DaemonResponse, PlaybackStatus, PlayerState};
 use crate::cache::Database;
 use crate::config::AppConfig;
 use crate::i18n::I18n;
+use crate::innertube::auth::AuthConfig;
+use crate::innertube::client::InnertubeClient;
 use crate::innertube::Track;
 
 const MPV_START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -80,12 +82,23 @@ pub fn shuffle_tracks_preserving_current(tracks: &mut Vec<Track>, current_idx: u
     }
 }
 
+#[derive(Debug, Clone)]
+struct PendingVariant {
+    generation: u64,
+    is_video: bool,
+    position_secs: f64,
+    paused: bool,
+}
+
 pub struct AudioDaemon {
     config: AppConfig,
     state: Arc<Mutex<PlayerState>>,
     db: Arc<Mutex<Database>>,
     bcast_tx: broadcast::Sender<PlayerState>,
-    mpv_tx: mpsc::Sender<MpvCommand>,
+    mpv_manager: MpvManager,
+    mpv_controller: Mutex<super::mpv_ipc::MpvController>,
+    mpv_event_tx: mpsc::Sender<MpvEvent>,
+    pending_variant: Mutex<Option<PendingVariant>>,
     prefetch_triggered: Arc<Mutex<bool>>,
     prefetch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     tui_clients: Arc<Mutex<usize>>,
@@ -94,6 +107,7 @@ pub struct AudioDaemon {
     original_queue: Arc<Mutex<Vec<Track>>>,
     shutdown_tx: broadcast::Sender<()>,
     daemon_running: AtomicBool,
+    reconnecting_mpv: AtomicBool,
     status_write_lock: Mutex<()>,
 }
 
@@ -108,19 +122,8 @@ impl AudioDaemon {
 
         let mpv_manager = MpvManager::new(config.mpv_sock.clone());
         let mpv_controller = mpv_manager
-            .start(mpv_event_tx, Arc::clone(&play_generation))
+            .start(mpv_event_tx.clone(), Arc::clone(&play_generation))
             .await?;
-
-        // Internal channel from daemon methods to mpv controller
-        let (mpv_cmd_tx, mut mpv_cmd_rx) = mpsc::channel::<MpvCommand>(32);
-        tokio::spawn(async move {
-            while let Some(cmd) = mpv_cmd_rx.recv().await {
-                if let Err(e) = mpv_controller.send(cmd).await {
-                    error!("MPV command worker stopped: {}", e);
-                    break;
-                }
-            }
-        });
 
         let state = Arc::new(Mutex::new(PlayerState::default()));
         let (shutdown_tx, _) = broadcast::channel(1);
@@ -131,7 +134,10 @@ impl AudioDaemon {
                 state,
                 db,
                 bcast_tx,
-                mpv_tx: mpv_cmd_tx,
+                mpv_manager,
+                mpv_controller: Mutex::new(mpv_controller),
+                mpv_event_tx,
+                pending_variant: Mutex::new(None),
                 prefetch_triggered: Arc::new(Mutex::new(false)),
                 prefetch_task: Mutex::new(None),
                 tui_clients: Arc::new(Mutex::new(0)),
@@ -140,6 +146,7 @@ impl AudioDaemon {
                 original_queue: Arc::new(Mutex::new(Vec::new())),
                 shutdown_tx,
                 daemon_running: AtomicBool::new(true),
+                reconnecting_mpv: AtomicBool::new(false),
                 status_write_lock: Mutex::new(()),
             },
             mpv_event_rx,
@@ -159,7 +166,7 @@ impl AudioDaemon {
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         let generation = *self.play_generation.lock().await;
-        let _ = self.mpv_tx.send(MpvCommand::Stop { generation }).await;
+        let _ = self.send_mpv_command(MpvCommand::Stop { generation }).await;
 
         // Write initial status.json
         self.write_status_json().await;
@@ -225,7 +232,11 @@ impl AudioDaemon {
         self.daemon_running.store(false, Ordering::Release);
         *self.tui_clients.lock().await = 0;
         let (quit_tx, quit_rx) = oneshot::channel();
-        if self.mpv_tx.send(MpvCommand::Quit(quit_tx)).await.is_ok() {
+        if self
+            .send_mpv_command(MpvCommand::Quit(quit_tx))
+            .await
+            .is_ok()
+        {
             let _ = tokio::time::timeout(Duration::from_secs(2), quit_rx).await;
         }
         self.write_status_json().await;
@@ -233,6 +244,31 @@ impl AudioDaemon {
         let _ = std::fs::remove_file(sock_path);
         info!("Audio daemon stopped");
         Ok(())
+    }
+
+    async fn send_mpv_command(&self, command: MpvCommand) -> Result<()> {
+        let mut controller = self.mpv_controller.lock().await;
+        match controller.send(command).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let command = error.0;
+                if matches!(&command, MpvCommand::Quit(_)) {
+                    anyhow::bail!("MPV worker channel closed during daemon shutdown");
+                }
+
+                warn!("MPV command channel closed; reconnecting before retrying the command");
+                let replacement = self
+                    .mpv_manager
+                    .start(self.mpv_event_tx.clone(), Arc::clone(&self.play_generation))
+                    .await
+                    .context("Could not restart the MPV command channel")?;
+                *controller = replacement;
+                controller
+                    .send(command)
+                    .await
+                    .map_err(|_| anyhow::anyhow!("MPV worker channel closed after reconnect"))
+            }
+        }
     }
 
     async fn handle_mpv_event(self: &Arc<Self>, event: MpvEvent) {
@@ -270,6 +306,51 @@ impl AudioDaemon {
                 event_generation, *generation
             );
             return;
+        }
+
+        if matches!(&event, MpvEvent::PlaybackRestart { .. }) {
+            let pending = {
+                let mut pending = self.pending_variant.lock().await;
+                if pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.generation == event_generation)
+                {
+                    pending.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(pending) = pending {
+                drop(generation);
+                if pending.position_secs > 0.0 {
+                    let _ = self
+                        .send_mpv_command(MpvCommand::SeekAbsolute(pending.position_secs))
+                        .await;
+                }
+                let _ = self
+                    .send_mpv_command(MpvCommand::SetPause(pending.paused))
+                    .await;
+                if !self.is_current_generation(event_generation).await {
+                    return;
+                }
+                {
+                    let mut state = self.state.lock().await;
+                    state.video_mode = pending.is_video;
+                    state.position_secs = pending.position_secs;
+                    state.status = if pending.paused {
+                        PlaybackStatus::Paused
+                    } else {
+                        PlaybackStatus::Playing
+                    };
+                    state.error_message = None;
+                    if pending.is_video {
+                        state.video_error_message = None;
+                    }
+                }
+                self.reconnecting_mpv.store(false, Ordering::Release);
+                self.broadcast_and_save().await;
+                return;
+            }
         }
 
         let mut state = self.state.lock().await;
@@ -346,9 +427,53 @@ impl AudioDaemon {
             }
             MpvEvent::FileError { message, .. } => {
                 let cur = state.current_track.clone();
+                let was_video_mode = state.video_mode;
+                let position_secs = state.position_secs;
+                let paused = state.status == PlaybackStatus::Paused;
+                let pending = {
+                    let mut pending = self.pending_variant.lock().await;
+                    if pending
+                        .as_ref()
+                        .is_some_and(|pending| pending.generation == event_generation)
+                    {
+                        pending.take()
+                    } else {
+                        None
+                    }
+                };
                 drop(state);
                 if let Some(track) = cur {
                     drop(generation);
+                    if pending.as_ref().is_some_and(|pending| pending.is_video) {
+                        let pending = pending.expect("checked pending video transition");
+                        self.switch_variant(
+                            track.clone(),
+                            Some(track.video_id.clone()),
+                            false,
+                            pending.position_secs,
+                            pending.paused,
+                            Some(current_i18n(&self.config).t("player.video_failed")),
+                        )
+                        .await;
+                        return;
+                    }
+                    if pending.is_some() {
+                        self.retry_after_mpv_error(event_generation, track, message)
+                            .await;
+                        return;
+                    }
+                    if was_video_mode {
+                        self.switch_variant(
+                            track.clone(),
+                            Some(track.video_id.clone()),
+                            false,
+                            position_secs,
+                            paused,
+                            Some(current_i18n(&self.config).t("player.video_failed")),
+                        )
+                        .await;
+                        return;
+                    }
                     self.retry_after_mpv_error(event_generation, track, message)
                         .await;
                     return;
@@ -399,6 +524,8 @@ impl AudioDaemon {
             state.position_secs = 0.0;
             state.duration_secs = track.duration_secs as f64;
             state.current_track = Some(track.clone());
+            state.video_mode = false;
+            state.video_error_message = None;
 
             let db = self.db.lock().await;
             state.is_liked = db.is_track_liked(&track.video_id).unwrap_or(false);
@@ -408,10 +535,11 @@ impl AudioDaemon {
             my_generation
         };
 
+        *self.pending_variant.lock().await = None;
+
         *self.prefetch_triggered.lock().await = false;
         if let Err(e) = self
-            .mpv_tx
-            .send(MpvCommand::Stop {
+            .send_mpv_command(MpvCommand::Stop {
                 generation: my_generation,
             })
             .await
@@ -477,10 +605,10 @@ impl AudioDaemon {
                         return;
                     }
                     if let Err(e) = daemon
-                        .mpv_tx
-                        .send(MpvCommand::LoadFile {
+                        .send_mpv_command(MpvCommand::LoadFile {
                             media: resolved,
                             generation: my_generation,
+                            title: format!("{} — {}", track.title, track.artist),
                         })
                         .await
                     {
@@ -520,6 +648,395 @@ impl AudioDaemon {
                         .await;
                 }
             }
+        });
+    }
+
+    pub async fn set_video_mode(self: &Arc<Self>, enabled: bool) {
+        let pending = self.pending_variant.lock().await.clone();
+        let (track, position_secs, paused, current_mode) = {
+            let state = self.state.lock().await;
+            (
+                state.current_track.clone(),
+                pending
+                    .as_ref()
+                    .map(|pending| pending.position_secs)
+                    .unwrap_or(state.position_secs),
+                pending
+                    .as_ref()
+                    .map(|pending| pending.paused)
+                    .unwrap_or(state.status == PlaybackStatus::Paused),
+                pending
+                    .as_ref()
+                    .map(|pending| pending.is_video)
+                    .unwrap_or(state.video_mode),
+            )
+        };
+
+        let Some(track) = track else {
+            let mut state = self.state.lock().await;
+            state.video_error_message = Some(current_i18n(&self.config).t("player.video_no_track"));
+            drop(state);
+            self.broadcast_and_save().await;
+            return;
+        };
+
+        if enabled == current_mode {
+            if !enabled && pending.is_none() {
+                let mut state = self.state.lock().await;
+                state.video_error_message = None;
+                drop(state);
+                self.broadcast_and_save().await;
+            }
+            return;
+        }
+
+        let media_id = if enabled {
+            track.music_video_id.clone()
+        } else {
+            Some(track.video_id.clone())
+        };
+
+        self.switch_variant(track, media_id, enabled, position_secs, paused, None)
+            .await;
+    }
+
+    pub async fn toggle_video_mode(self: &Arc<Self>) {
+        let pending_mode = self
+            .pending_variant
+            .lock()
+            .await
+            .as_ref()
+            .map(|pending| pending.is_video);
+        let current_mode = pending_mode.unwrap_or(self.state.lock().await.video_mode);
+        self.set_video_mode(!current_mode).await;
+    }
+
+    async fn switch_variant(
+        self: &Arc<Self>,
+        track: Track,
+        media_id: Option<String>,
+        is_video: bool,
+        position_secs: f64,
+        paused: bool,
+        video_error_message: Option<String>,
+    ) {
+        let generation = {
+            let mut generation = self.play_generation.lock().await;
+            *generation = generation.wrapping_add(1);
+            let generation = *generation;
+            let mut state = self.state.lock().await;
+            state.status = PlaybackStatus::Buffering;
+            state.error_message = None;
+            state.video_error_message = video_error_message;
+            state.position_secs = position_secs.max(0.0);
+            generation
+        };
+
+        *self.pending_variant.lock().await = Some(PendingVariant {
+            generation,
+            is_video,
+            position_secs: position_secs.max(0.0),
+            paused,
+        });
+        if let Err(error) = self.send_mpv_command(MpvCommand::Stop { generation }).await {
+            self.fail_playback_if_current(
+                generation,
+                format!("Could not stop MPV before switching media: {error}"),
+            )
+            .await;
+            return;
+        }
+        self.broadcast_and_save().await;
+
+        let daemon = Arc::clone(self);
+        let generation_watch = Arc::clone(&self.play_generation);
+        tokio::spawn(async move {
+            let mut track = track;
+            let result: Result<Option<(super::prefetch::ResolvedMedia, String)>> = tokio::select! {
+                biased;
+                _ = wait_for_generation_change(Arc::clone(&generation_watch), generation) => return,
+                result = async {
+                    if is_video {
+                        let video_id = match media_id.as_deref() {
+                            Some(video_id) => Some(video_id.to_string()),
+                            None => daemon.resolve_music_video_id(&track.video_id).await?,
+                        };
+                        let Some(video_id) = video_id else {
+                            return Ok(None);
+                        };
+                        let media = resolve_music_video_stream_url(&video_id, &daemon.config).await?;
+                        Ok(Some((media, video_id)))
+                    } else {
+                        let audio_id = media_id
+                            .as_deref()
+                            .unwrap_or(&track.video_id)
+                            .to_string();
+                        let db = Arc::clone(&daemon.db);
+                        let media = resolve_stream_url(&audio_id, &db, &daemon.config).await?;
+                        Ok(Some((media, audio_id)))
+                    }
+                } => result,
+            };
+
+            let (resolved, resolved_media_id) = match result {
+                Ok(Some(resolved)) => resolved,
+                Ok(None) => {
+                    daemon
+                        .fallback_to_audio(
+                            generation,
+                            track,
+                            position_secs,
+                            paused,
+                            current_i18n(&daemon.config).t("player.video_unavailable"),
+                        )
+                        .await;
+                    return;
+                }
+                Err(error) if is_video => {
+                    warn!(
+                        "Could not resolve video variant for {}: {:#}",
+                        track.video_id, error
+                    );
+                    daemon
+                        .fallback_to_audio(
+                            generation,
+                            track,
+                            position_secs,
+                            paused,
+                            current_i18n(&daemon.config).t("player.video_failed"),
+                        )
+                        .await;
+                    return;
+                }
+                Err(error) => {
+                    daemon
+                        .fail_playback_if_current(
+                            generation,
+                            format!("Could not resolve the audio stream: {error:#}"),
+                        )
+                        .await;
+                    return;
+                }
+            };
+
+            if !daemon.is_current_generation(generation).await {
+                return;
+            }
+            if is_video {
+                track.music_video_id = Some(resolved_media_id);
+                daemon.update_track_video_id(generation, &track).await;
+                if !daemon.is_current_generation(generation).await {
+                    return;
+                }
+            }
+            let source_still_current = daemon
+                .config
+                .load_playback_auth()
+                .map(|settings| settings.source == resolved.auth_source)
+                .unwrap_or(false);
+            if !source_still_current {
+                daemon
+                    .fail_playback_if_current(
+                        generation,
+                        "Playback authentication changed during stream resolution; start the track again."
+                            .to_string(),
+                    )
+                    .await;
+                return;
+            }
+
+            if let Err(error) = daemon
+                .send_mpv_command(MpvCommand::LoadFile {
+                    media: resolved,
+                    generation,
+                    title: format!("{} — {}", track.title, track.artist),
+                })
+                .await
+            {
+                daemon
+                    .fail_playback_if_current(
+                        generation,
+                        format!("Could not send the media to MPV: {error}"),
+                    )
+                    .await;
+                return;
+            }
+
+            let watchdog_daemon = Arc::clone(&daemon);
+            tokio::spawn(async move {
+                tokio::time::sleep(MPV_START_TIMEOUT).await;
+                watchdog_daemon
+                    .fail_buffering_if_current(
+                        generation,
+                        format!(
+                            "MPV did not start playback within {} seconds",
+                            MPV_START_TIMEOUT.as_secs()
+                        ),
+                    )
+                    .await;
+            });
+        });
+    }
+
+    async fn resolve_music_video_id(&self, audio_video_id: &str) -> Result<Option<String>> {
+        let mut client = InnertubeClient::new(AuthConfig::load(&self.config.auth_file));
+        client
+            .ensure_valid_token(Some(&self.config.auth_file))
+            .await?;
+        client.music_video_counterpart_id(audio_video_id).await
+    }
+
+    async fn update_track_video_id(&self, generation: u64, track: &Track) {
+        if !self.is_current_generation(generation).await {
+            return;
+        }
+
+        let state = {
+            let mut state = self.state.lock().await;
+            if state
+                .current_track
+                .as_ref()
+                .is_some_and(|current| current.video_id == track.video_id)
+            {
+                state.current_track = Some(track.clone());
+            }
+            for queued_track in &mut state.queue {
+                if queued_track.video_id == track.video_id {
+                    queued_track.music_video_id = track.music_video_id.clone();
+                }
+            }
+            state.clone()
+        };
+
+        {
+            let mut original_queue = self.original_queue.lock().await;
+            for queued_track in original_queue.iter_mut() {
+                if queued_track.video_id == track.video_id {
+                    queued_track.music_video_id = track.music_video_id.clone();
+                }
+            }
+        }
+
+        if let Some(music_video_id) = track.music_video_id.as_deref() {
+            let db = self.db.lock().await;
+            if let Err(error) = db.update_music_video_id(&track.video_id, music_video_id) {
+                warn!(
+                    "Could not cache the music video counterpart for {}: {}",
+                    track.video_id, error
+                );
+            }
+        }
+
+        let _ = self.bcast_tx.send(state);
+        self.write_status_json().await;
+    }
+
+    async fn fallback_to_audio(
+        self: &Arc<Self>,
+        failed_generation: u64,
+        track: Track,
+        position_secs: f64,
+        paused: bool,
+        video_error_message: String,
+    ) {
+        let generation = {
+            let mut generation = self.play_generation.lock().await;
+            if *generation != failed_generation {
+                return;
+            }
+            *generation = generation.wrapping_add(1);
+            let generation = *generation;
+            let mut state = self.state.lock().await;
+            state.status = PlaybackStatus::Buffering;
+            state.video_mode = false;
+            state.video_error_message = Some(video_error_message);
+            state.position_secs = position_secs.max(0.0);
+            generation
+        };
+        *self.pending_variant.lock().await = Some(PendingVariant {
+            generation,
+            is_video: false,
+            position_secs: position_secs.max(0.0),
+            paused,
+        });
+        if let Err(error) = self.send_mpv_command(MpvCommand::Stop { generation }).await {
+            self.fail_playback_if_current(
+                generation,
+                format!("Could not restore audio after video playback failed: {error}"),
+            )
+            .await;
+            return;
+        }
+        self.broadcast_and_save().await;
+
+        let daemon = Arc::clone(self);
+        let generation_watch = Arc::clone(&self.play_generation);
+        tokio::spawn(async move {
+            let db = Arc::clone(&daemon.db);
+            let result = tokio::select! {
+                biased;
+                _ = wait_for_generation_change(Arc::clone(&generation_watch), generation) => return,
+                result = resolve_stream_url(&track.video_id, &db, &daemon.config) => result,
+            };
+            let resolved = match result {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    daemon
+                        .fail_playback_if_current(
+                            generation,
+                            format!("Could not restore the audio stream: {error:#}"),
+                        )
+                        .await;
+                    return;
+                }
+            };
+            if !daemon.is_current_generation(generation).await {
+                return;
+            }
+            let source_still_current = daemon
+                .config
+                .load_playback_auth()
+                .map(|settings| settings.source == resolved.auth_source)
+                .unwrap_or(false);
+            if !source_still_current {
+                daemon
+                    .fail_playback_if_current(
+                        generation,
+                        "Playback authentication changed during stream resolution; start the track again."
+                            .to_string(),
+                    )
+                    .await;
+                return;
+            }
+            if let Err(error) = daemon
+                .send_mpv_command(MpvCommand::LoadFile {
+                    media: resolved,
+                    generation,
+                    title: format!("{} — {}", track.title, track.artist),
+                })
+                .await
+            {
+                daemon
+                    .fail_playback_if_current(
+                        generation,
+                        format!("Could not restore audio in MPV: {error}"),
+                    )
+                    .await;
+                return;
+            }
+            let watchdog_daemon = Arc::clone(&daemon);
+            tokio::spawn(async move {
+                tokio::time::sleep(MPV_START_TIMEOUT).await;
+                watchdog_daemon
+                    .fail_buffering_if_current(
+                        generation,
+                        format!(
+                            "MPV did not resume audio within {} seconds",
+                            MPV_START_TIMEOUT.as_secs()
+                        ),
+                    )
+                    .await;
+            });
         });
     }
 
@@ -641,11 +1158,13 @@ impl AudioDaemon {
         state.status = PlaybackStatus::Stopped;
         state.error_message = Some(message.chars().take(500).collect());
         state.position_secs = 0.0;
+        state.video_mode = false;
         drop(state);
         drop(current_generation);
+        *self.pending_variant.lock().await = None;
+        self.reconnecting_mpv.store(false, Ordering::Release);
         if let Err(e) = self
-            .mpv_tx
-            .send(MpvCommand::Stop {
+            .send_mpv_command(MpvCommand::Stop {
                 generation: stop_generation,
             })
             .await
@@ -766,7 +1285,7 @@ impl AudioDaemon {
     pub async fn play(&self) {
         let is_paused = self.state.lock().await.status == PlaybackStatus::Paused;
         if is_paused {
-            if let Err(e) = self.mpv_tx.send(MpvCommand::SetPause(false)).await {
+            if let Err(e) = self.send_mpv_command(MpvCommand::SetPause(false)).await {
                 warn!("Could not send play command to MPV: {}", e);
             }
         }
@@ -775,7 +1294,7 @@ impl AudioDaemon {
     pub async fn pause(&self) {
         let is_playing = self.state.lock().await.status == PlaybackStatus::Playing;
         if is_playing {
-            if let Err(e) = self.mpv_tx.send(MpvCommand::SetPause(true)).await {
+            if let Err(e) = self.send_mpv_command(MpvCommand::SetPause(true)).await {
                 warn!("Could not send pause command to MPV: {}", e);
             }
         }
@@ -806,10 +1325,13 @@ impl AudioDaemon {
             state.status = PlaybackStatus::Stopped;
             state.error_message = None;
             state.position_secs = 0.0;
+            state.video_mode = false;
+            state.video_error_message = None;
             next_generation
         };
 
-        if let Err(e) = self.mpv_tx.send(MpvCommand::Stop { generation }).await {
+        *self.pending_variant.lock().await = None;
+        if let Err(e) = self.send_mpv_command(MpvCommand::Stop { generation }).await {
             warn!("Could not send stop command to MPV: {}", e);
         }
         self.broadcast_and_save().await;
@@ -881,7 +1403,7 @@ impl AudioDaemon {
             let mut state = self.state.lock().await;
             state.volume = clamped;
         }
-        let _ = self.mpv_tx.send(MpvCommand::SetVolume(clamped)).await;
+        let _ = self.send_mpv_command(MpvCommand::SetVolume(clamped)).await;
         self.broadcast_and_save().await;
     }
 
@@ -1254,7 +1776,7 @@ impl AudioDaemon {
                     writer.write_all(json.as_bytes()).await?;
                 }
                 DaemonCommand::Seek(secs) => {
-                    let _ = self.mpv_tx.send(MpvCommand::Seek(secs)).await;
+                    let _ = self.send_mpv_command(MpvCommand::Seek(secs)).await;
                     let resp = DaemonResponse::Ok;
                     let mut json = serde_json::to_string(&resp)?;
                     json.push('\n');
@@ -1269,6 +1791,20 @@ impl AudioDaemon {
                 }
                 DaemonCommand::SetVolume(v) => {
                     self.set_volume(v).await;
+                    let resp = DaemonResponse::Ok;
+                    let mut json = serde_json::to_string(&resp)?;
+                    json.push('\n');
+                    writer.write_all(json.as_bytes()).await?;
+                }
+                DaemonCommand::SetVideoMode(enabled) => {
+                    self.set_video_mode(enabled).await;
+                    let resp = DaemonResponse::Ok;
+                    let mut json = serde_json::to_string(&resp)?;
+                    json.push('\n');
+                    writer.write_all(json.as_bytes()).await?;
+                }
+                DaemonCommand::ToggleVideoMode => {
+                    self.toggle_video_mode().await;
                     let resp = DaemonResponse::Ok;
                     let mut json = serde_json::to_string(&resp)?;
                     json.push('\n');

@@ -181,6 +181,10 @@ impl App {
                     let _ = send_daemon_command(&self.config, DaemonCommand::ToggleShuffle).await;
                     return Ok(());
                 }
+                KeyCode::Char('v') | KeyCode::Char('V') => {
+                    let _ = send_daemon_command(&self.config, DaemonCommand::ToggleVideoMode).await;
+                    return Ok(());
+                }
                 KeyCode::Char('1') => {
                     self.active_panel = ActivePanel::Sidebar;
                     return Ok(());

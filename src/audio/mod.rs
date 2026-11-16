@@ -34,6 +34,10 @@ pub struct PlayerState {
     pub is_radio_active: bool,
     #[serde(default)]
     pub shuffle_enabled: bool,
+    #[serde(default)]
+    pub video_mode: bool,
+    #[serde(default)]
+    pub video_error_message: Option<String>,
 }
 
 impl Default for PlayerState {
@@ -50,6 +54,8 @@ impl Default for PlayerState {
             queue_index: 0,
             is_radio_active: false,
             shuffle_enabled: false,
+            video_mode: false,
+            video_error_message: None,
         }
     }
 }
@@ -68,6 +74,8 @@ pub enum DaemonCommand {
     Seek(i64),
     VolumeDelta(i32),
     SetVolume(u8),
+    SetVideoMode(bool),
+    ToggleVideoMode,
     ToggleLike,
     ToggleShuffle,
     PlaybackAuthChanged,

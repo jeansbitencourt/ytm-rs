@@ -56,6 +56,95 @@ pub fn is_category_label(s: &str) -> bool {
     )
 }
 
+fn has_official_video_endpoint(value: &Value, video_id: &str) -> bool {
+    match value {
+        Value::Object(object) => {
+            let is_explicitly_typed_video = object.get("videoId").and_then(Value::as_str)
+                == Some(video_id)
+                && object.get("musicVideoType").and_then(Value::as_str)
+                    == Some("MUSIC_VIDEO_TYPE_OMV");
+            let is_matching_official_video = object
+                .get("watchEndpoint")
+                .and_then(Value::as_object)
+                .is_some_and(|endpoint| {
+                    endpoint.get("videoId").and_then(Value::as_str) == Some(video_id)
+                        && endpoint
+                            .get("watchEndpointMusicSupportedConfigs")
+                            .and_then(|value| value.get("watchEndpointMusicConfig"))
+                            .and_then(|value| value.get("musicVideoType"))
+                            .and_then(Value::as_str)
+                            == Some("MUSIC_VIDEO_TYPE_OMV")
+                });
+            is_explicitly_typed_video
+                || is_matching_official_video
+                || object
+                    .values()
+                    .any(|child| has_official_video_endpoint(child, video_id))
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(|child| has_official_video_endpoint(child, video_id)),
+        _ => false,
+    }
+}
+
+fn explicit_music_video_id(renderer: &Value, video_id: &str) -> Option<String> {
+    has_official_video_endpoint(renderer, video_id).then(|| video_id.to_string())
+}
+
+fn counterpart_video_id(wrapper: &Value, primary_video_id: &str) -> Option<String> {
+    let primary_id = wrapper
+        .pointer("/primaryRenderer/playlistPanelVideoRenderer/videoId")
+        .and_then(Value::as_str)?;
+    if primary_id != primary_video_id {
+        return None;
+    }
+
+    wrapper
+        .pointer("/counterpart/0/counterpartRenderer/playlistPanelVideoRenderer/videoId")
+        .and_then(Value::as_str)
+        .filter(|video_id| is_valid_video_id(video_id))
+        .map(str::to_string)
+        .or_else(|| {
+            let primary = wrapper.pointer("/primaryRenderer/playlistPanelVideoRenderer")?;
+            has_official_video_endpoint(primary, primary_video_id)
+                .then(|| primary_video_id.to_string())
+        })
+}
+
+fn find_counterpart_video_id(value: &Value, primary_video_id: &str) -> Option<String> {
+    match value {
+        Value::Object(object) => {
+            if let Some(wrapper) = object.get("playlistPanelVideoWrapperRenderer") {
+                if let Some(video_id) = counterpart_video_id(wrapper, primary_video_id) {
+                    return Some(video_id);
+                }
+            }
+            object
+                .values()
+                .find_map(|child| find_counterpart_video_id(child, primary_video_id))
+        }
+        Value::Array(items) => items
+            .iter()
+            .find_map(|child| find_counterpart_video_id(child, primary_video_id)),
+        _ => None,
+    }
+}
+
+fn is_valid_video_id(video_id: &str) -> bool {
+    video_id.len() == 11
+        && video_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+/// Finds the exact audio-to-video counterpart returned by the watch playlist.
+pub fn parse_music_video_counterpart(response: &Value, audio_video_id: &str) -> Option<String> {
+    find_counterpart_video_id(response, audio_video_id).or_else(|| {
+        has_official_video_endpoint(response, audio_video_id).then(|| audio_video_id.to_string())
+    })
+}
+
 pub fn parse_search_results(val: &Value) -> Vec<Track> {
     let mut tracks = Vec::new();
     let items = val
@@ -179,14 +268,11 @@ pub fn parse_music_responsive_item(renderer: &Value) -> Option<Track> {
         .unwrap_or("")
         .to_string();
 
-    Some(Track::new(
-        video_id,
-        title,
-        artist,
-        album,
-        duration_secs,
-        thumbnail_url,
-    ))
+    let music_video_id = explicit_music_video_id(renderer, &video_id);
+    Some(
+        Track::new(video_id, title, artist, album, duration_secs, thumbnail_url)
+            .with_music_video_id(music_video_id),
+    )
 }
 
 pub fn parse_radio_results(val: &Value) -> Vec<Track> {
@@ -197,8 +283,18 @@ pub fn parse_radio_results(val: &Value) -> Vec<Track> {
 
     if let Some(Value::Array(list)) = items {
         for item in list {
-            if let Some(renderer) = item.get("playlistPanelVideoRenderer") {
-                if let Some(track) = parse_playlist_panel_video(renderer) {
+            let wrapper = item.get("playlistPanelVideoWrapperRenderer");
+            let renderer = item.get("playlistPanelVideoRenderer").or_else(|| {
+                wrapper
+                    .and_then(|value| value.pointer("/primaryRenderer/playlistPanelVideoRenderer"))
+            });
+            if let Some(renderer) = renderer {
+                if let Some(mut track) = parse_playlist_panel_video(renderer) {
+                    if let Some(wrapper) = wrapper {
+                        if let Some(video_id) = counterpart_video_id(wrapper, &track.video_id) {
+                            track.music_video_id = Some(video_id);
+                        }
+                    }
                     tracks.push(track);
                 }
             }
@@ -275,14 +371,11 @@ pub fn parse_playlist_panel_video(renderer: &Value) -> Option<Track> {
         .unwrap_or("")
         .to_string();
 
-    Some(Track::new(
-        video_id,
-        title,
-        artist,
-        album,
-        duration_secs,
-        thumbnail_url,
-    ))
+    let music_video_id = explicit_music_video_id(renderer, &video_id);
+    Some(
+        Track::new(video_id, title, artist, album, duration_secs, thumbnail_url)
+            .with_music_video_id(music_video_id),
+    )
 }
 
 pub fn parse_playlist_results(val: &Value) -> Vec<Track> {
@@ -1202,14 +1295,11 @@ pub fn parse_tv_tile_track(tile: &Value) -> Option<Track> {
         .unwrap_or("")
         .to_string();
 
-    Some(Track::new(
-        video_id,
-        title,
-        artist,
-        album,
-        duration_secs,
-        thumbnail_url,
-    ))
+    let music_video_id = explicit_music_video_id(tile, &video_id);
+    Some(
+        Track::new(video_id, title, artist, album, duration_secs, thumbnail_url)
+            .with_music_video_id(music_video_id),
+    )
 }
 
 #[cfg(test)]
