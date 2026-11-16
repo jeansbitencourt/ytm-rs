@@ -191,9 +191,19 @@ fn parse_video_media(
         let video_only = formats
             .iter()
             .find(|format| has_codec(format, "vcodec") && !has_codec(format, "acodec"));
-        let audio_only = formats
-            .iter()
-            .find(|format| has_codec(format, "acodec") && !has_codec(format, "vcodec"));
+        let audio_only = formats.iter().find(|format| {
+            !has_codec(format, "vcodec")
+                && (has_codec(format, "acodec")
+                        // YouTube live HLS can omit `acodec` on the selected
+                        // audio-only format. Since yt-dlp returned this as
+                        // part of the explicit video+audio selection, the
+                        // non-video URL is still the paired audio stream.
+                        || (video_only.is_some()
+                            && format
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .is_some_and(|url| !url.is_empty())))
+        });
         if let (Some(video), Some(audio)) = (video_only, audio_only) {
             let video_url = required_format_url(video, "video")?;
             let audio_url = required_format_url(audio, "audio")?;
@@ -226,6 +236,10 @@ fn parse_video_media(
             .min();
             return Ok((video_url, Some(audio_url), headers, format, expires_at));
         }
+    }
+
+    if !has_codec(metadata, "vcodec") {
+        anyhow::bail!("yt-dlp did not provide a video stream");
     }
 
     let url = metadata

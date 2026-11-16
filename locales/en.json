@@ -156,7 +156,7 @@
   "player.help_button": "[❓ Help]",
   "player.video_button": "[📺 Video]   ",
   "player.video_no_track": "No track is playing to show in video",
-  "player.video_unavailable": "This track has no official music video available",
+  "player.video_unavailable": "This track has no video available",
   "player.video_failed": "Could not open the video; audio playback was restored",
   "player.shuffle_tag": " • 🔀 Shuffle",
   "player.no_track": "No track playing",
