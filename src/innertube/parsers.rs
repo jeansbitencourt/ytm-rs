@@ -145,6 +145,117 @@ pub fn parse_music_video_counterpart(response: &Value, audio_video_id: &str) -> 
     })
 }
 
+/// Finds the queue track and its album browse ID in a `/next` response.
+/// The queue row can be an ATV without a `counterpart` wrapper, while the
+/// associated album browse response may expose its OMV video ID.
+pub fn parse_watch_track_album_context(
+    response: &Value,
+    video_id: &str,
+) -> Option<(Track, String)> {
+    let renderer = find_watch_track_renderer(response, video_id)?;
+    let track = parse_playlist_panel_video(renderer)?;
+    let album_id = renderer
+        .pointer("/longBylineText/runs")
+        .or_else(|| renderer.pointer("/shortBylineText/runs"))
+        .and_then(Value::as_array)?
+        .iter()
+        .find_map(|run| {
+            let browse = run.pointer("/navigationEndpoint/browseEndpoint")?;
+            let page_type = browse
+                .pointer("/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType")
+                .and_then(Value::as_str);
+            (page_type == Some("MUSIC_PAGE_TYPE_ALBUM"))
+                .then(|| browse.get("browseId").and_then(Value::as_str))
+                .flatten()
+                .map(str::to_string)
+        })?;
+    Some((track, album_id))
+}
+
+fn find_watch_track_renderer<'a>(value: &'a Value, video_id: &str) -> Option<&'a Value> {
+    match value {
+        Value::Object(object) => {
+            if let Some(renderer) = object
+                .get("playlistPanelVideoWrapperRenderer")
+                .and_then(|wrapper| wrapper.pointer("/primaryRenderer/playlistPanelVideoRenderer"))
+                .or_else(|| object.get("playlistPanelVideoRenderer"))
+            {
+                if renderer.get("videoId").and_then(Value::as_str) == Some(video_id) {
+                    return Some(renderer);
+                }
+            }
+            object
+                .values()
+                .find_map(|child| find_watch_track_renderer(child, video_id))
+        }
+        Value::Array(items) => items
+            .iter()
+            .find_map(|child| find_watch_track_renderer(child, video_id)),
+        _ => None,
+    }
+}
+
+/// Matches OMV rows from the exact album attached to a watch-queue track.
+/// Matching stays within that album and requires an exact normalized title;
+/// ambiguous duplicate titles are rejected unless artist or duration resolves
+/// them to one candidate.
+pub fn find_album_music_video_for_track(album_tracks: &[Track], current: &Track) -> Option<String> {
+    let title = normalize_track_label(&current.title);
+    if title.is_empty() {
+        return None;
+    }
+
+    let candidates = album_tracks
+        .iter()
+        .filter_map(|track| {
+            let video_id = track.music_video_id.as_deref()?;
+            (video_id != current.video_id && normalize_track_label(&track.title) == title)
+                .then_some((track, video_id))
+        })
+        .collect::<Vec<_>>();
+
+    if candidates.len() == 1 {
+        return Some(candidates[0].1.to_string());
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let current_artist = normalize_track_label(&current.artist);
+    if !current_artist.is_empty() && current_artist != normalize_track_label("Artista Desconhecido")
+    {
+        let matches = candidates
+            .iter()
+            .filter(|(track, _)| normalize_track_label(&track.artist) == current_artist)
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            return Some(matches[0].1.to_string());
+        }
+    }
+
+    if current.duration_secs > 0 {
+        let matches = candidates
+            .iter()
+            .filter(|(track, _)| {
+                track.duration_secs > 0 && track.duration_secs.abs_diff(current.duration_secs) <= 3
+            })
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            return Some(matches[0].1.to_string());
+        }
+    }
+
+    None
+}
+
+fn normalize_track_label(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
 pub fn parse_search_results(val: &Value) -> Vec<Track> {
     let mut tracks = Vec::new();
     let items = val
