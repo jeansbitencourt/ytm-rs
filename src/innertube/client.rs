@@ -254,39 +254,55 @@ impl InnertubeClient {
         if let Some(video_id) = parse_music_video_counterpart(&body, video_id) {
             return Ok(Some(video_id));
         }
+        let atv_video_id = parse_audio_track_video_id(&body, video_id);
 
         // `/next` frequently returns an ATV as a plain playlist row, even when
-        // the album catalog knows its official music video. The album browse
-        // response can expose that OMV ID, so use the exact album endpoint
-        // attached to this queue row as a second source of variant metadata.
+        // the album catalog knows its video variant. Prefer that exact album
+        // variant before trying the ATV itself as a final video candidate.
         let Some((current_track, album_id)) = parse_watch_track_album_context(&body, video_id)
         else {
-            return Ok(None);
+            return Ok(atv_video_id);
         };
-        let album_url = format!("{}/browse", INNERTUBE_BASE_URL);
-        let album_payload = json!({
-            "context": Self::default_context(),
-            "browseId": album_id
-        });
-        let album_response = self
-            .http
-            .post(album_url)
-            .headers(self.build_web_headers())
-            .json(&album_payload)
-            .send()
-            .await
-            .context("Failed to request the track's YouTube Music album")?
-            .error_for_status()
-            .context("YouTube Music rejected the track's album request")?;
-        let album_body: Value = album_response
-            .json()
-            .await
-            .context("Failed to parse the YouTube Music album response")?;
-        let (_, album_tracks) = parse_album_browse_tracks(&album_body);
-        Ok(find_album_music_video_for_track(
-            &album_tracks,
-            &current_track,
-        ))
+        let album_result: Result<Option<String>> = async {
+            let album_url = format!("{}/browse", INNERTUBE_BASE_URL);
+            let album_payload = json!({
+                "context": Self::default_context(),
+                "browseId": album_id
+            });
+            let album_response = self
+                .http
+                .post(album_url)
+                .headers(self.build_web_headers())
+                .json(&album_payload)
+                .send()
+                .await
+                .context("Failed to request the track's YouTube Music album")?
+                .error_for_status()
+                .context("YouTube Music rejected the track's album request")?;
+            let album_body: Value = album_response
+                .json()
+                .await
+                .context("Failed to parse the YouTube Music album response")?;
+            let (_, album_tracks) = parse_album_browse_tracks(&album_body);
+            Ok(find_album_music_video_for_track(
+                &album_tracks,
+                &current_track,
+            ))
+        }
+        .await;
+
+        match album_result {
+            Ok(Some(video_id)) => Ok(Some(video_id)),
+            Ok(None) => Ok(atv_video_id),
+            Err(error) if atv_video_id.is_some() => {
+                warn!(
+                    "Album video lookup failed for ATV {}: {:#}",
+                    video_id, error
+                );
+                Ok(atv_video_id)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn browse_continuation(&self, continuation: &str) -> Result<Value> {

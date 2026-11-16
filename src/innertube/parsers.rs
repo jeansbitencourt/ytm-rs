@@ -56,14 +56,16 @@ pub fn is_category_label(s: &str) -> bool {
     )
 }
 
-fn has_official_video_endpoint(value: &Value, video_id: &str) -> bool {
+fn has_video_type_endpoint(value: &Value, video_id: &str, video_types: &[&str]) -> bool {
     match value {
         Value::Object(object) => {
             let is_explicitly_typed_video = object.get("videoId").and_then(Value::as_str)
                 == Some(video_id)
-                && object.get("musicVideoType").and_then(Value::as_str)
-                    == Some("MUSIC_VIDEO_TYPE_OMV");
-            let is_matching_official_video = object
+                && object
+                    .get("musicVideoType")
+                    .and_then(Value::as_str)
+                    .is_some_and(|video_type| video_types.contains(&video_type));
+            let is_matching_supported_video = object
                 .get("watchEndpoint")
                 .and_then(Value::as_object)
                 .is_some_and(|endpoint| {
@@ -73,23 +75,39 @@ fn has_official_video_endpoint(value: &Value, video_id: &str) -> bool {
                             .and_then(|value| value.get("watchEndpointMusicConfig"))
                             .and_then(|value| value.get("musicVideoType"))
                             .and_then(Value::as_str)
-                            == Some("MUSIC_VIDEO_TYPE_OMV")
+                            .is_some_and(|video_type| video_types.contains(&video_type))
                 });
             is_explicitly_typed_video
-                || is_matching_official_video
+                || is_matching_supported_video
                 || object
                     .values()
-                    .any(|child| has_official_video_endpoint(child, video_id))
+                    .any(|child| has_video_type_endpoint(child, video_id, video_types))
         }
         Value::Array(items) => items
             .iter()
-            .any(|child| has_official_video_endpoint(child, video_id)),
+            .any(|child| has_video_type_endpoint(child, video_id, video_types)),
         _ => false,
     }
 }
 
-fn explicit_music_video_id(renderer: &Value, video_id: &str) -> Option<String> {
-    has_official_video_endpoint(renderer, video_id).then(|| video_id.to_string())
+fn has_supported_video_endpoint(value: &Value, video_id: &str) -> bool {
+    // OMV and UGC are direct candidates; ATV is only attempted after album lookup.
+    has_video_type_endpoint(
+        value,
+        video_id,
+        &["MUSIC_VIDEO_TYPE_OMV", "MUSIC_VIDEO_TYPE_UGC"],
+    )
+}
+
+/// Returns a direct ATV ID as a last resort; the media resolver must verify
+/// that yt-dlp actually provides a video stream for it.
+pub fn parse_audio_track_video_id(response: &Value, video_id: &str) -> Option<String> {
+    has_video_type_endpoint(response, video_id, &["MUSIC_VIDEO_TYPE_ATV"])
+        .then(|| video_id.to_string())
+}
+
+fn explicit_video_id(renderer: &Value, video_id: &str) -> Option<String> {
+    has_supported_video_endpoint(renderer, video_id).then(|| video_id.to_string())
 }
 
 fn counterpart_video_id(wrapper: &Value, primary_video_id: &str) -> Option<String> {
@@ -107,7 +125,7 @@ fn counterpart_video_id(wrapper: &Value, primary_video_id: &str) -> Option<Strin
         .map(str::to_string)
         .or_else(|| {
             let primary = wrapper.pointer("/primaryRenderer/playlistPanelVideoRenderer")?;
-            has_official_video_endpoint(primary, primary_video_id)
+            has_supported_video_endpoint(primary, primary_video_id)
                 .then(|| primary_video_id.to_string())
         })
 }
@@ -138,16 +156,16 @@ fn is_valid_video_id(video_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
-/// Finds the exact audio-to-video counterpart returned by the watch playlist.
+/// Finds the exact OMV or UGC video variant returned by the watch playlist.
 pub fn parse_music_video_counterpart(response: &Value, audio_video_id: &str) -> Option<String> {
     find_counterpart_video_id(response, audio_video_id).or_else(|| {
-        has_official_video_endpoint(response, audio_video_id).then(|| audio_video_id.to_string())
+        has_supported_video_endpoint(response, audio_video_id).then(|| audio_video_id.to_string())
     })
 }
 
 /// Finds the queue track and its album browse ID in a `/next` response.
 /// The queue row can be an ATV without a `counterpart` wrapper, while the
-/// associated album browse response may expose its OMV video ID.
+/// associated album browse response may expose its video variant ID.
 pub fn parse_watch_track_album_context(
     response: &Value,
     video_id: &str,
@@ -195,7 +213,7 @@ fn find_watch_track_renderer<'a>(value: &'a Value, video_id: &str) -> Option<&'a
     }
 }
 
-/// Matches OMV rows from the exact album attached to a watch-queue track.
+/// Matches explicit video variants from the exact album attached to a queue track.
 /// Matching stays within that album and requires an exact normalized title;
 /// ambiguous duplicate titles are rejected unless artist or duration resolves
 /// them to one candidate.
@@ -379,7 +397,7 @@ pub fn parse_music_responsive_item(renderer: &Value) -> Option<Track> {
         .unwrap_or("")
         .to_string();
 
-    let music_video_id = explicit_music_video_id(renderer, &video_id);
+    let music_video_id = explicit_video_id(renderer, &video_id);
     Some(
         Track::new(video_id, title, artist, album, duration_secs, thumbnail_url)
             .with_music_video_id(music_video_id),
@@ -482,7 +500,7 @@ pub fn parse_playlist_panel_video(renderer: &Value) -> Option<Track> {
         .unwrap_or("")
         .to_string();
 
-    let music_video_id = explicit_music_video_id(renderer, &video_id);
+    let music_video_id = explicit_video_id(renderer, &video_id);
     Some(
         Track::new(video_id, title, artist, album, duration_secs, thumbnail_url)
             .with_music_video_id(music_video_id),
@@ -1406,7 +1424,7 @@ pub fn parse_tv_tile_track(tile: &Value) -> Option<Track> {
         .unwrap_or("")
         .to_string();
 
-    let music_video_id = explicit_music_video_id(tile, &video_id);
+    let music_video_id = explicit_video_id(tile, &video_id);
     Some(
         Track::new(video_id, title, artist, album, duration_secs, thumbnail_url)
             .with_music_video_id(music_video_id),
