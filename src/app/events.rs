@@ -55,16 +55,34 @@ impl App {
                 }
                 KeyCode::Char('l') | KeyCode::Char('L') if self.auth_input.is_empty() => {
                     if self.auth.is_authenticated() {
+                        let playback_clear = self.config.clear_playback_auth();
+                        if playback_clear.is_ok() {
+                            let _ = send_daemon_command(
+                                &self.config,
+                                DaemonCommand::PlaybackAuthChanged,
+                            )
+                            .await;
+                        }
                         let _ = std::fs::remove_file(&self.config.auth_file);
                         self.auth = crate::innertube::auth::AuthConfig::default();
                         self.client.auth = self.auth.clone();
+                        if playback_clear.is_ok() {
+                            self.playback_auth = crate::config::PlaybackAuthSettings::default();
+                        }
                         self.user_profile = None;
                         self.avatar_protocol = None;
                         self.current_avatar_image = None;
                         self.user_playlists.clear();
                         self.is_oauth_polling = false;
                         self.oauth_user_code = None;
-                        self.auth_message = Some((self.i18n.t("auth.disconnected"), true));
+                        self.auth_message = match playback_clear {
+                            Ok(()) => Some((self.i18n.t("auth.disconnected"), true)),
+                            Err(error) => Some((
+                                self.i18n
+                                    .tf("auth.playback_clear_error", [("error", error)]),
+                                false,
+                            )),
+                        };
                     }
                 }
                 KeyCode::Char(c) => {
@@ -111,6 +129,9 @@ impl App {
                     self.show_auth_modal = true;
                     self.auth_input.clear();
                     self.auth_message = None;
+                    if let Ok(settings) = self.config.load_playback_auth() {
+                        self.playback_auth = settings;
+                    }
                     return Ok(());
                 }
                 KeyCode::Char('q') => {

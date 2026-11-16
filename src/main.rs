@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     Event, KeyEventKind,
@@ -12,6 +12,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::fs::OpenOptions;
 use std::io::stdout;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -22,7 +23,7 @@ use tracing::info;
 use ytm_rs::app::App;
 use ytm_rs::audio::daemon::{ensure_daemon_running, send_daemon_command, AudioDaemon};
 use ytm_rs::audio::{DaemonCommand, DaemonResponse, PlayerState};
-use ytm_rs::config::AppConfig;
+use ytm_rs::config::{AppConfig, PlaybackAuthSettings, PlaybackAuthSource};
 use ytm_rs::innertube::auth::{extract_sapisid_from_cookies, AuthConfig};
 use ytm_rs::theme::{Theme, ThemeWatcher};
 use ytm_rs::topbar::waybar::read_waybar_status;
@@ -95,10 +96,71 @@ enum AuthAction {
     Status,
     /// Start interactive Google login using a TV code (google.com/device)
     Login,
-    /// Save YouTube Music cookies
-    Cookies { value: String },
+    /// Read a Cookie header for library access from standard input
+    Cookies,
     /// Remove authentication credentials
     Logout,
+    /// Configure authentication used only for stream extraction
+    Playback {
+        #[command(subcommand)]
+        action: PlaybackAuthAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum PlaybackAuthAction {
+    /// Show the stream authentication source without contacting YouTube
+    Status,
+    /// Query only the available audio formats for one video ID; do not download media
+    Inspect { video_id: String },
+    /// Read cookies from a supported browser profile using yt-dlp
+    Browser {
+        #[arg(value_enum)]
+        browser: PlaybackBrowser,
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Import an existing Netscape-format cookie file into private app storage
+    Cookies { file: PathBuf },
+    /// Disable playback credentials and remove the imported cookie copy
+    Disable,
+    /// Explicitly enable or disable background prefetch for authenticated playback
+    Prefetch { setting: PrefetchSetting },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum PlaybackBrowser {
+    Brave,
+    Chrome,
+    Chromium,
+    Edge,
+    Firefox,
+    Opera,
+    Safari,
+    Vivaldi,
+    Whale,
+}
+
+impl PlaybackBrowser {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Brave => "brave",
+            Self::Chrome => "chrome",
+            Self::Chromium => "chromium",
+            Self::Edge => "edge",
+            Self::Firefox => "firefox",
+            Self::Opera => "opera",
+            Self::Safari => "safari",
+            Self::Vivaldi => "vivaldi",
+            Self::Whale => "whale",
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum PrefetchSetting {
+    On,
+    Off,
 }
 
 #[tokio::main]
@@ -494,7 +556,7 @@ async fn run_auth(config: AppConfig, action: Option<AuthAction>) -> Result<()> {
         Some(AuthAction::Status) => {
             let auth = AuthConfig::load(&config.auth_file);
             if auth.is_authenticated() {
-                println!("✓ Autenticado no YouTube Music.");
+                println!("Biblioteca: credenciais configuradas.");
                 if auth.has_oauth() {
                     println!("  Método: Google OAuth 2.0 (Device Code - Token permanente).");
                 }
@@ -502,8 +564,9 @@ async fn run_auth(config: AppConfig, action: Option<AuthAction>) -> Result<()> {
                     println!("  Método: Cookies / SAPISID ativo.");
                 }
             } else {
-                println!("✗ Não autenticado. Execute 'ytm-rs auth login' para conectar sua conta.");
+                println!("Biblioteca: desconectada (busca pública disponível).");
             }
+            print_playback_auth_status(&config)?;
         }
         Some(AuthAction::Login) => {
             println!("Iniciando autenticação Google Device Flow (RFC 8628)...");
@@ -581,7 +644,18 @@ async fn run_auth(config: AppConfig, action: Option<AuthAction>) -> Result<()> {
             }
             println!("\n✗ Tempo limite de autorização esgotado.");
         }
-        Some(AuthAction::Cookies { value }) => {
+        Some(AuthAction::Cookies) => {
+            use std::io::{IsTerminal, Read};
+            let mut stdin = std::io::stdin();
+            if stdin.is_terminal() {
+                anyhow::bail!("Pipe the Cookie header on standard input; do not pass it as a command-line argument");
+            }
+            let mut value = String::new();
+            stdin.read_to_string(&mut value)?;
+            let value = value.trim().to_string();
+            if value.is_empty() {
+                anyhow::bail!("No Cookie header was provided on standard input");
+            }
             let mut auth = AuthConfig::load(&config.auth_file);
             auth.sapisid = extract_sapisid_from_cookies(&value);
             auth.cookies = Some(value);
@@ -589,26 +663,147 @@ async fn run_auth(config: AppConfig, action: Option<AuthAction>) -> Result<()> {
             println!("✓ Cookies salvos com sucesso em {:?}", config.auth_file);
         }
         Some(AuthAction::Logout) => {
+            config.clear_playback_auth()?;
             if config.auth_file.exists() {
                 std::fs::remove_file(&config.auth_file)?;
             }
-            println!("✓ Credenciais removidas.");
+            notify_daemon_playback_auth_changed(&config).await;
+            println!("✓ Credenciais da biblioteca e da reprodução removidas.");
         }
+        Some(AuthAction::Playback { action }) => run_playback_auth(config, action).await?,
         None => {
             println!("=== Autenticação do YouTube Music (YTM-RS) ===");
             println!("Opção 1 (Recomendada): Login Google permanente via código:");
             println!("  execute: ytm-rs auth login\n");
-            println!("Opção 2: Salvar cookies do navegador (DevTools):");
-            println!("  execute: ytm-rs auth cookies \"<conteúdo do cookie>\"\n");
+            println!("Opção 2: Ler um cabeçalho Cookie pela entrada padrão:");
+            println!("  execute: cat cookie-header.txt | ytm-rs auth cookies\n");
             let auth = AuthConfig::load(&config.auth_file);
             if auth.is_authenticated() {
-                println!("Status atual: ✓ Autenticado");
+                println!("Status atual: ✓ Credenciais da biblioteca configuradas");
             } else {
                 println!("Status atual: ✗ Não autenticado (Modo público ativo)");
             }
+            println!("A autenticação da biblioteca não habilita credenciais de reprodução.");
+            println!("Use 'ytm-rs auth playback --help' para configurar uma fonte separada.");
         }
     }
     Ok(())
+}
+
+fn print_playback_auth_status(config: &AppConfig) -> Result<()> {
+    let settings = config.load_playback_auth()?;
+    if settings.source.is_enabled() {
+        println!(
+            "Reprodução: credenciais configuradas via {} (a sessão ainda não foi validada).",
+            settings.source.description()
+        );
+        println!(
+            "  Prefetch autenticado: {}.",
+            if settings.prefetch_enabled {
+                "ativo"
+            } else {
+                "desativado"
+            }
+        );
+        println!("  Opção experimental: uso da conta pode causar bloqueio; nenhum benefício Premium concreto foi demonstrado.");
+    } else {
+        println!("Reprodução: anônima (padrão).");
+    }
+    Ok(())
+}
+
+async fn run_playback_auth(config: AppConfig, action: PlaybackAuthAction) -> Result<()> {
+    match action {
+        PlaybackAuthAction::Status => print_playback_auth_status(&config)?,
+        PlaybackAuthAction::Inspect { video_id } => {
+            let formats =
+                ytm_rs::audio::prefetch::inspect_stream_formats(&video_id, &config).await?;
+            println!("Formatos de áudio disponíveis para {video_id} (nenhuma mídia baixada):");
+            for format in formats {
+                let bitrate = format
+                    .bitrate_kbps
+                    .map(|value| format!("{value:.0} kb/s"))
+                    .unwrap_or_else(|| "ABR desconhecido".to_string());
+                let sample_rate = format
+                    .sample_rate_hz
+                    .map(|value| format!("{value} Hz"))
+                    .unwrap_or_else(|| "taxa desconhecida".to_string());
+                println!(
+                    "  {:<8} {:<8} {:<12} {}",
+                    format.id,
+                    format.extension,
+                    format.codec,
+                    format!("{bitrate}, {sample_rate}")
+                );
+            }
+            println!("A consulta foi limitada a uma extração sem retry. Aguarde pelo menos uma hora antes de qualquer reprodução autenticada.");
+        }
+        PlaybackAuthAction::Browser { browser, profile } => {
+            let settings = PlaybackAuthSettings {
+                source: PlaybackAuthSource::Browser {
+                    browser: browser.as_str().to_string(),
+                    profile,
+                },
+                // Authenticated prefetch is opt-in to avoid hidden extraction requests.
+                prefetch_enabled: false,
+            };
+            config.save_playback_auth(&settings)?;
+            notify_daemon_playback_auth_changed(&config).await;
+            println!(
+                "✓ Fonte de reprodução configurada: {}.",
+                settings.source.description()
+            );
+            println!("  Opção experimental: uso da conta pode causar bloqueio; nenhum benefício Premium concreto foi demonstrado.");
+        }
+        PlaybackAuthAction::Cookies { file } => {
+            config.import_playback_cookies(&file)?;
+            notify_daemon_playback_auth_changed(&config).await;
+            println!("✓ Arquivo Netscape importado para armazenamento privado do aplicativo.");
+            println!("  A cópia importada é apagada por 'ytm-rs auth playback disable' ou 'ytm-rs auth logout'.");
+        }
+        PlaybackAuthAction::Disable => {
+            config.clear_playback_auth()?;
+            notify_daemon_playback_auth_changed(&config).await;
+            println!("✓ Reprodução anônima restaurada; a cópia importada foi removida.");
+        }
+        PlaybackAuthAction::Prefetch { setting } => {
+            let mut settings = config.load_playback_auth()?;
+            if !settings.source.is_enabled() {
+                anyhow::bail!(
+                    "Configure uma fonte de reprodução antes de alterar o prefetch autenticado"
+                );
+            }
+            settings.prefetch_enabled = matches!(setting, PrefetchSetting::On);
+            config.save_playback_auth(&settings)?;
+            println!(
+                "✓ Prefetch autenticado {}.",
+                if settings.prefetch_enabled {
+                    "ativado"
+                } else {
+                    "desativado"
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn notify_daemon_playback_auth_changed(config: &AppConfig) {
+    let Ok(stream) = UnixStream::connect(&config.state_sock).await else {
+        return;
+    };
+    let (reader, mut writer) = stream.into_split();
+    let Ok(mut message) = serde_json::to_string(&DaemonCommand::PlaybackAuthChanged) else {
+        return;
+    };
+    message.push('\n');
+    let update = async {
+        writer.write_all(message.as_bytes()).await?;
+        let mut lines = BufReader::new(reader).lines();
+        let _ = lines.next_line().await?;
+        Ok::<(), anyhow::Error>(())
+    };
+    let _ = tokio::time::timeout(Duration::from_secs(2), update).await;
 }
 
 async fn run_tui(config: AppConfig) -> Result<()> {

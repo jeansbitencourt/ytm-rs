@@ -7,6 +7,8 @@ url='https://github.com/jeansbitencourt/ytm-rs'
 license=('MIT')
 depends=('mpv' 'yt-dlp' 'gcc-libs' 'alsa-lib' 'dbus')
 optdepends=(
+  'deno: JavaScript runtime recommended by yt-dlp for YouTube challenge solving'
+  'python-secretstorage: allow yt-dlp to read Chromium browser cookies from GNOME Keyring'
   'foot: terminal padrão recomendado no Omarchy (suporte nativo a Sixel e regras de janela)'
   'kitty: emulador de terminal com suporte ao Kitty Graphics Protocol'
   'ghostty: emulador de terminal moderno com aceleração por GPU'

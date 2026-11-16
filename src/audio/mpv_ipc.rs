@@ -1,3 +1,4 @@
+use super::prefetch::ResolvedMedia;
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::collections::VecDeque;
@@ -13,11 +14,16 @@ use tracing::{debug, error, info};
 
 #[derive(Debug)]
 pub enum MpvCommand {
-    LoadFile { url: String, generation: u64 },
+    LoadFile {
+        media: ResolvedMedia,
+        generation: u64,
+    },
     SetPause(bool),
     SetVolume(u8),
     Seek(i64),
-    Stop { generation: u64 },
+    Stop {
+        generation: u64,
+    },
     Quit(oneshot::Sender<()>),
 }
 
@@ -81,6 +87,7 @@ impl MpvManager {
         }
 
         let stream = stream.context("Failed to connect to MPV IPC socket")?;
+        restrict_socket_permissions(&self.sock_path)?;
         let (reader, mut writer) = stream.into_split();
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<MpvCommand>(32);
         let event_context = Arc::new(StdMutex::new(EventContext::default()));
@@ -183,11 +190,7 @@ impl MpvManager {
                                 } else if reason == "stop" {
                                     let _ = ev_tx.send(MpvEvent::Stopped { generation }).await;
                                 } else if reason == "error" {
-                                    let message = val
-                                        .get("file_error")
-                                        .and_then(|error| error.as_str())
-                                        .unwrap_or("MPV could not load the stream")
-                                        .to_string();
+                                    let message = "MPV could not load media".to_string();
                                     let _ = ev_tx
                                         .send(MpvEvent::FileError {
                                             generation,
@@ -218,7 +221,7 @@ impl MpvManager {
                             let _ = ev_tx
                                 .send(MpvEvent::FileError {
                                     generation: request_id,
-                                    message: format!("MPV rejected the load command: {result}"),
+                                    message: "MPV rejected the load command".to_string(),
                                 })
                                 .await;
                         }
@@ -238,7 +241,7 @@ impl MpvManager {
         let writer_event_tx = event_tx;
         tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
-                if let MpvCommand::LoadFile { url, generation } = cmd {
+                if let MpvCommand::LoadFile { media, generation } = cmd {
                     // Serialize generation changes with the actual IPC write. A stale
                     // resolver may have queued a command before a newer selection.
                     let current_generation = writer_generation.lock().await;
@@ -254,11 +257,34 @@ impl MpvManager {
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .pending_loads
                         .push_back(generation);
-                    let cmds = [
+                    let headers = encode_http_header_fields(&media.headers);
+                    let mut per_file_options = serde_json::Map::new();
+                    if !headers.is_empty() {
+                        per_file_options.insert("http-header-fields".to_string(), json!(headers));
+                    }
+                    if media.auth_source.is_enabled() {
+                        // Disable libcurl's transparent retries for an authenticated stream.
+                        per_file_options.insert("curl-max-retries".to_string(), json!("0"));
+                    }
+                    let load_command = if per_file_options.is_empty() {
                         json!({
-                            "command": ["loadfile", url, "replace"],
+                            "command": ["loadfile", media.url, "replace"],
                             "request_id": generation
-                        }),
+                        })
+                    } else {
+                        json!({
+                            "command": [
+                                "loadfile",
+                                media.url,
+                                "replace",
+                                -1,
+                                per_file_options
+                            ],
+                            "request_id": generation
+                        })
+                    };
+                    let cmds = [
+                        load_command,
                         json!({"command": ["set_property", "pause", false]}),
                     ];
                     let mut write_error = None;
@@ -345,6 +371,7 @@ impl MpvManager {
     async fn ensure_process(&self) -> Result<()> {
         if self.sock_path.exists() {
             if UnixStream::connect(&self.sock_path).await.is_ok() {
+                restrict_socket_permissions(&self.sock_path)?;
                 debug!("MPV process already running and responsive");
                 return Ok(());
             }
@@ -371,4 +398,53 @@ impl MpvManager {
 
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn restrict_socket_permissions(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| "Could not restrict MPV IPC socket permissions")
+}
+
+fn encode_http_header_fields(headers: &[(String, String)]) -> String {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let mut encoded_value = String::with_capacity(value.len());
+            for character in value.chars() {
+                if character == ',' || character == '\\' {
+                    encoded_value.push('\\');
+                }
+                encoded_value.push(character);
+            }
+            format!("{name}: {encoded_value}")
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodes_mpvs_per_file_header_list() {
+        let headers = vec![
+            (
+                "Referer".to_string(),
+                "https://music.youtube.com/".to_string(),
+            ),
+            ("Cookie".to_string(), "one=1,two=2\\three".to_string()),
+        ];
+        assert_eq!(
+            encode_http_header_fields(&headers),
+            "Referer: https://music.youtube.com/,Cookie: one=1\\,two=2\\\\three"
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_socket_permissions(_path: &std::path::Path) -> Result<()> {
+    Ok(())
 }

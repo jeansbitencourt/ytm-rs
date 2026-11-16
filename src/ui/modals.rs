@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::config::PlaybackAuthSource;
 use crate::i18n::LanguagePreference;
 
 fn text(app: &App, key: &str) -> String {
@@ -159,7 +160,7 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Status & Info
+            Constraint::Length(4), // Library and playback auth status
             Constraint::Length(5), // Instructions
             Constraint::Length(3), // Input box
             Constraint::Length(2), // Feedback / Status Message
@@ -230,8 +231,33 @@ pub fn render_auth_modal(f: &mut Frame, area: Rect, app: &App) {
         ])
     };
 
+    let playback_source = match &app.playback_auth.source {
+        PlaybackAuthSource::Disabled => text(app, "auth.playback_anonymous"),
+        PlaybackAuthSource::Browser { browser, profile } => match profile {
+            Some(profile) => app.i18n.tf(
+                "auth.playback_browser_profile",
+                [("browser", browser), ("profile", profile)],
+            ),
+            None => app.i18n.tf("auth.playback_browser", [("browser", browser)]),
+        },
+        PlaybackAuthSource::NetscapeCookieFile => text(app, "auth.playback_cookie_file"),
+    };
+    let playback_status = if app.playback_auth.source.is_enabled() {
+        app.i18n
+            .tf("auth.playback_configured", [("source", playback_source)])
+    } else {
+        text(app, "auth.playback_anonymous")
+    };
     let p_status = Paragraph::new(vec![
         status_line,
+        Line::from(vec![
+            Span::styled(app.i18n.t("auth.playback_label"), theme.title_style()),
+            Span::styled(playback_status, theme.text_style()),
+        ]),
+        Line::from(Span::styled(
+            text(app, "auth.playback_note"),
+            theme.muted_style(),
+        )),
         Line::from(Span::styled(
             text(app, "auth.sync_description"),
             theme.text_style(),

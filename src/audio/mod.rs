@@ -70,6 +70,7 @@ pub enum DaemonCommand {
     SetVolume(u8),
     ToggleLike,
     ToggleShuffle,
+    PlaybackAuthChanged,
     StartRadio(Track),
     GetState,
     Subscribe,
@@ -98,6 +99,11 @@ mod tests {
         let shuf_ser = serde_json::to_string(&shuf_cmd).unwrap();
         let shuf_deser: DaemonCommand = serde_json::from_str(&shuf_ser).unwrap();
         assert_eq!(shuf_cmd, shuf_deser);
+
+        let auth_changed = DaemonCommand::PlaybackAuthChanged;
+        let auth_changed_ser = serde_json::to_string(&auth_changed).unwrap();
+        let auth_changed_deser: DaemonCommand = serde_json::from_str(&auth_changed_ser).unwrap();
+        assert_eq!(auth_changed, auth_changed_deser);
 
         let mut state = PlayerState::default();
         assert!(!state.shuffle_enabled);

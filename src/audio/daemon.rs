@@ -87,6 +87,7 @@ pub struct AudioDaemon {
     bcast_tx: broadcast::Sender<PlayerState>,
     mpv_tx: mpsc::Sender<MpvCommand>,
     prefetch_triggered: Arc<Mutex<bool>>,
+    prefetch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     tui_clients: Arc<Mutex<usize>>,
     play_generation: Arc<Mutex<u64>>,
     retry_count: Arc<Mutex<u8>>,
@@ -132,6 +133,7 @@ impl AudioDaemon {
                 bcast_tx,
                 mpv_tx: mpv_cmd_tx,
                 prefetch_triggered: Arc::new(Mutex::new(false)),
+                prefetch_task: Mutex::new(None),
                 tui_clients: Arc::new(Mutex::new(0)),
                 play_generation,
                 retry_count: Arc::new(Mutex::new(0)),
@@ -284,7 +286,24 @@ impl AudioDaemon {
                             let next_idx = state.queue_index + 1;
                             if next_idx < state.queue.len() {
                                 let next_track = state.queue[next_idx].clone();
-                                spawn_prefetch(next_track.video_id, Arc::clone(&self.db));
+                                let should_prefetch = self
+                                    .config
+                                    .load_playback_auth()
+                                    .map(|settings| {
+                                        !settings.source.is_enabled() || settings.prefetch_enabled
+                                    })
+                                    .unwrap_or(false);
+                                if should_prefetch {
+                                    let mut prefetch_task = self.prefetch_task.lock().await;
+                                    if let Some(previous_task) = prefetch_task.take() {
+                                        previous_task.abort();
+                                    }
+                                    *prefetch_task = Some(spawn_prefetch(
+                                        next_track.video_id,
+                                        Arc::clone(&self.db),
+                                        self.config.clone(),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -415,7 +434,7 @@ impl AudioDaemon {
             let result = tokio::select! {
                 biased;
                 _ = wait_for_generation_change(Arc::clone(&generation_watch), my_generation) => return,
-                result = resolve_stream_url(&video_id, &db) => result,
+                result = resolve_stream_url(&video_id, &db, &daemon.config) => result,
             };
 
             match result {
@@ -442,10 +461,25 @@ impl AudioDaemon {
                     if !daemon.is_current_generation(my_generation).await {
                         return;
                     }
+
+                    let source_still_current = daemon
+                        .config
+                        .load_playback_auth()
+                        .map(|settings| settings.source == resolved.auth_source)
+                        .unwrap_or(false);
+                    if !source_still_current {
+                        daemon
+                            .fail_playback_if_current(
+                                my_generation,
+                                "Playback authentication changed during stream resolution; start the track again.".to_string(),
+                            )
+                            .await;
+                        return;
+                    }
                     if let Err(e) = daemon
                         .mpv_tx
                         .send(MpvCommand::LoadFile {
-                            url: resolved.url,
+                            media: resolved,
                             generation: my_generation,
                         })
                         .await
@@ -495,6 +529,20 @@ impl AudioDaemon {
         track: Track,
         message: String,
     ) {
+        let auth_configured = self
+            .config
+            .load_playback_auth()
+            .map(|settings| settings.source.is_enabled())
+            .unwrap_or(true);
+        if auth_configured {
+            self.fail_playback_if_current(
+                failed_generation,
+                "Configured playback credentials could not be used. Automatic retries are disabled; check the selected source or disable playback authentication.".to_string(),
+            )
+            .await;
+            return;
+        }
+
         enum RetryAction {
             Delayed(u64),
             RefreshUrl,
@@ -735,6 +783,15 @@ impl AudioDaemon {
 
     pub async fn stop(self: &Arc<Self>) {
         self.stop_if_generation(None).await;
+    }
+
+    pub async fn playback_auth_changed(self: &Arc<Self>) {
+        // Stop any in-flight resolver or media request so old credentials and
+        // per-file MPV headers are discarded immediately after configuration changes.
+        if let Some(prefetch_task) = self.prefetch_task.lock().await.take() {
+            prefetch_task.abort();
+        }
+        self.stop().await;
     }
 
     async fn stop_if_generation(&self, expected_generation: Option<u64>) {
@@ -1226,6 +1283,13 @@ impl AudioDaemon {
                 }
                 DaemonCommand::ToggleShuffle => {
                     self.toggle_shuffle().await;
+                    let resp = DaemonResponse::Ok;
+                    let mut json = serde_json::to_string(&resp)?;
+                    json.push('\n');
+                    writer.write_all(json.as_bytes()).await?;
+                }
+                DaemonCommand::PlaybackAuthChanged => {
+                    self.playback_auth_changed().await;
                     let resp = DaemonResponse::Ok;
                     let mut json = serde_json::to_string(&resp)?;
                     json.push('\n');

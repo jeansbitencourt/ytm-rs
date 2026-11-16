@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use crate::audio::daemon::send_daemon_command;
 use crate::audio::{DaemonCommand, DaemonResponse, PlayerState};
 use crate::cache::Database;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, PlaybackAuthSettings};
 use crate::i18n::{I18n, LanguagePreference};
 use crate::innertube::client::InnertubeClient;
 use crate::innertube::{
@@ -114,6 +114,7 @@ pub struct App {
     pub playlist_load_rx: UnboundedReceiver<PlaylistLoadResult>,
     pub client: InnertubeClient,
     pub auth: crate::innertube::auth::AuthConfig,
+    pub playback_auth: PlaybackAuthSettings,
     pub db: Arc<Mutex<Database>>,
     pub picker: Picker,
     pub cover_protocol: Option<Box<dyn StatefulProtocol>>,
@@ -172,6 +173,7 @@ impl App {
 
         let auth = crate::innertube::auth::AuthConfig::load(&config.auth_file);
         let client = InnertubeClient::new(auth.clone());
+        let playback_auth = config.load_playback_auth()?;
 
         let mut sidebar_state = ListState::default();
         sidebar_state.select(Some(0));
@@ -310,6 +312,7 @@ impl App {
             playlist_load_rx,
             client,
             auth,
+            playback_auth,
             db,
             picker,
             cover_protocol: None,
