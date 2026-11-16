@@ -1,6 +1,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,8 +32,28 @@ impl AuthConfig {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, content)?;
+        let content = serde_json::to_vec_pretty(self)?;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let tmp_path = path.with_extension(format!("json.tmp.{}-{timestamp}", std::process::id()));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp_path)?;
+        if let Err(error) = file.write_all(&content).and_then(|()| file.sync_all()) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(error.into());
+        }
+        if let Err(error) = std::fs::rename(&tmp_path, path) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(error.into());
+        }
         Ok(())
     }
 
@@ -113,5 +135,34 @@ mod tests {
             extract_sapisid_from_cookies(cookies),
             Some("abc_xyz_456".to_string())
         );
+    }
+
+    #[test]
+    fn auth_file_is_written_with_private_permissions() {
+        let root = std::env::temp_dir().join(format!(
+            "ytm-rs-auth-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let path = root.join("auth.json");
+        AuthConfig {
+            cookies: Some("test-secret".to_string()),
+            ..AuthConfig::default()
+        }
+        .save(&path)
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 }
