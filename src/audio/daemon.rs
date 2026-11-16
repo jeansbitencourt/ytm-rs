@@ -277,15 +277,7 @@ impl AudioDaemon {
         }
 
         if let MpvEvent::ConnectionLost(message) = &event {
-            error!("Lost connection to MPV: {}", message);
-            let mut generation = self.play_generation.lock().await;
-            *generation = generation.wrapping_add(1);
-            let mut state = self.state.lock().await;
-            state.status = PlaybackStatus::Stopped;
-            state.error_message = Some(format!("MPV connection lost: {message}"));
-            drop(state);
-            drop(generation);
-            self.broadcast_and_save().await;
+            self.recover_after_mpv_disconnect(message.clone()).await;
             return;
         }
 
@@ -1038,6 +1030,66 @@ impl AudioDaemon {
                     .await;
             });
         });
+    }
+
+    async fn recover_after_mpv_disconnect(self: &Arc<Self>, message: String) {
+        if self.reconnecting_mpv.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        error!("Lost connection to MPV: {}", message);
+
+        let (track, position_secs, paused, volume) = {
+            let mut generation = self.play_generation.lock().await;
+            *generation = generation.wrapping_add(1);
+            let mut state = self.state.lock().await;
+            let track = state.current_track.clone();
+            let position_secs = state.position_secs;
+            let paused = state.status == PlaybackStatus::Paused;
+            let volume = state.volume;
+            state.video_mode = false;
+            state.status = if track.is_some() {
+                PlaybackStatus::Buffering
+            } else {
+                PlaybackStatus::Stopped
+            };
+            state.error_message = None;
+            (track, position_secs, paused, volume)
+        };
+        self.broadcast_and_save().await;
+
+        let controller = match self
+            .mpv_manager
+            .start(self.mpv_event_tx.clone(), Arc::clone(&self.play_generation))
+            .await
+        {
+            Ok(controller) => controller,
+            Err(error) => {
+                self.reconnecting_mpv.store(false, Ordering::Release);
+                let generation = *self.play_generation.lock().await;
+                self.fail_playback_if_current(
+                    generation,
+                    format!("Could not restart MPV after its playback window closed: {error}"),
+                )
+                .await;
+                return;
+            }
+        };
+        *self.mpv_controller.lock().await = controller;
+        let _ = self.send_mpv_command(MpvCommand::SetVolume(volume)).await;
+
+        if let Some(track) = track {
+            self.switch_variant(
+                track.clone(),
+                Some(track.video_id.clone()),
+                false,
+                position_secs,
+                paused,
+                None,
+            )
+            .await;
+        } else {
+            self.reconnecting_mpv.store(false, Ordering::Release);
+        }
     }
 
     async fn retry_after_mpv_error(
